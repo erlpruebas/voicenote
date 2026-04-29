@@ -4,7 +4,14 @@ import {
   FileText, Volume2, Loader2,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
-import { loadAudio, loadTranscript, formatDuration } from '../services/fileStorage';
+import {
+  loadAudio,
+  loadCachedAudio,
+  loadTranscript,
+  loadCachedTranscript,
+  saveCachedTranscript,
+  formatDuration,
+} from '../services/fileStorage';
 import { transcribe } from '../services/transcription';
 import { saveTranscript } from '../services/fileStorage';
 
@@ -36,7 +43,8 @@ export function PlayerModal() {
     setTranscript(null);
     setError('');
 
-    loadAudio(rec.project, `${rec.name}.mp3`).then((blob) => {
+    const audioName = rec.audioName ?? `${rec.name}.mp3`;
+    loadAudio(rec.project, audioName).then((blob) => blob ?? loadCachedAudio(rec.id)).then((blob) => {
       if (!blob) return;
       if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
       blobUrlRef.current = URL.createObjectURL(blob);
@@ -54,7 +62,8 @@ export function PlayerModal() {
   useEffect(() => {
     if (tab === 'transcript' && rec && !transcript) {
       setLoadingTranscript(true);
-      loadTranscript(rec.project, `${rec.name}.mp3`)
+      loadTranscript(rec.project, rec.audioName ?? `${rec.name}.mp3`)
+        .then((t) => t ?? loadCachedTranscript(rec.id))
         .then((t) => setTranscript(t ?? ''))
         .finally(() => setLoadingTranscript(false));
     }
@@ -110,10 +119,12 @@ export function PlayerModal() {
     setRetranscribing(true);
     setError('');
     try {
-      const blob = await loadAudio(r.project, `${r.name}.mp3`);
+      const audioName = r.audioName ?? `${r.name}.mp3`;
+      const blob = await loadAudio(r.project, audioName) ?? await loadCachedAudio(r.id);
       if (!blob) throw new Error('No se encontró el archivo de audio.');
       const text = await transcribe(blob, provider, prompt);
-      await saveTranscript(text, r.project, `${r.name}.mp3`);
+      await saveTranscript(text, r.project, audioName);
+      await saveCachedTranscript(r.id, text);
       setTranscript(text);
       updateRecording(r.id, { transcribed: true, transcriptionError: undefined });
     } catch (err) {
@@ -208,6 +219,24 @@ export function PlayerModal() {
                 <SkipForward size={26} />
               </button>
             </div>
+
+            <button
+              className="btn-primary flex items-center gap-2 disabled:opacity-50"
+              onClick={async () => {
+                await handleRetranscribe();
+                setTab('transcript');
+              }}
+              disabled={retranscribing}
+            >
+              {retranscribing ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
+              {rec.transcribed ? 'Transcribir de nuevo' : 'Transcribir'}
+            </button>
+
+            {error && (
+              <p className="text-sm text-red-500 bg-red-50 dark:bg-red-900/20 rounded-xl p-3 w-full">
+                {error}
+              </p>
+            )}
           </div>
         )}
 
@@ -223,7 +252,7 @@ export function PlayerModal() {
                 disabled={retranscribing}
               >
                 {retranscribing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                Reintentar
+                {rec.transcribed ? 'Reintentar' : 'Transcribir'}
               </button>
             </div>
 
@@ -247,7 +276,7 @@ export function PlayerModal() {
                 <p className="text-sm text-gray-400">
                   {rec.transcriptionError
                     ? `Error previo: ${rec.transcriptionError}`
-                    : 'Sin transcripción. Pulsa "Reintentar" para transcribir.'}
+                    : 'Sin transcripción. Pulsa "Transcribir" para empezar.'}
                 </p>
               </div>
             )}

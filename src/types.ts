@@ -16,6 +16,7 @@ export interface Provider {
 export interface Recording {
   id: string;
   name: string;
+  audioName?: string;
   project: string;
   timestamp: number;
   duration: number;

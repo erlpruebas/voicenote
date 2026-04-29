@@ -1,8 +1,9 @@
+import { blobToBase64 } from './base64';
+
 export async function transcribeOpenRouter(
   blob: Blob, apiKey: string, model: string, prompt: string
 ): Promise<string> {
-  const buf = await blob.arrayBuffer();
-  const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const b64 = await blobToBase64(blob);
 
   const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',

@@ -1,7 +1,8 @@
-const INLINE_MAX_BYTES = 18 * 1024 * 1024; // 18 MB — stay safely under the 20 MB inline limit
+import { blobToBase64 } from './base64';
+
+const INLINE_MAX_BYTES = 18 * 1024 * 1024;
 
 async function uploadFile(blob: Blob, apiKey: string): Promise<string> {
-  // Step 1: initiate resumable upload
   const initRes = await fetch(
     `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`,
     {
@@ -19,9 +20,8 @@ async function uploadFile(blob: Blob, apiKey: string): Promise<string> {
   if (!initRes.ok) throw new Error(`Gemini upload init ${initRes.status}: ${await initRes.text()}`);
 
   const uploadUrl = initRes.headers.get('X-Goog-Upload-URL');
-  if (!uploadUrl) throw new Error('No se recibió URL de subida de Gemini.');
+  if (!uploadUrl) throw new Error('No se recibio URL de subida de Gemini.');
 
-  // Step 2: upload binary
   const uploadRes = await fetch(uploadUrl, {
     method: 'POST',
     headers: {
@@ -35,9 +35,8 @@ async function uploadFile(blob: Blob, apiKey: string): Promise<string> {
 
   const data = await uploadRes.json();
   const uri: string | undefined = data.file?.uri;
-  if (!uri) throw new Error('No se recibió URI del archivo subido a Gemini.');
+  if (!uri) throw new Error('No se recibio URI del archivo subido a Gemini.');
 
-  // Step 3: wait until file is ACTIVE (usually instant for audio)
   await waitForActive(uri, apiKey);
   return uri;
 }
@@ -66,12 +65,9 @@ export async function transcribeGemini(
   let audioPart: object;
 
   if (blob.size <= INLINE_MAX_BYTES) {
-    // Small file — send inline as base64
-    const buf = await blob.arrayBuffer();
-    const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    const b64 = await blobToBase64(blob);
     audioPart = { inlineData: { mimeType: 'audio/mpeg', data: b64 } };
   } else {
-    // Large file — upload via Files API
     const fileUri = await uploadFile(blob, apiKey);
     audioPart = { fileData: { mimeType: 'audio/mpeg', fileUri } };
   }

@@ -1,13 +1,65 @@
 const DB_NAME = 'voicenote-fs';
 const STORE_NAME = 'handles';
+const AUDIO_STORE_NAME = 'audio-blobs';
+const TRANSCRIPT_STORE_NAME = 'transcripts';
 
 // ── IndexedDB helpers ──────────────────────────────────────────────────────
 
 async function openDB(): Promise<IDBDatabase> {
   return new Promise((res, rej) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE_NAME);
+    const req = indexedDB.open(DB_NAME, 3);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains(STORE_NAME)) {
+        req.result.createObjectStore(STORE_NAME);
+      }
+      if (!req.result.objectStoreNames.contains(AUDIO_STORE_NAME)) {
+        req.result.createObjectStore(AUDIO_STORE_NAME);
+      }
+      if (!req.result.objectStoreNames.contains(TRANSCRIPT_STORE_NAME)) {
+        req.result.createObjectStore(TRANSCRIPT_STORE_NAME);
+      }
+    };
     req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error);
+  });
+}
+
+export async function saveCachedTranscript(id: string, text: string): Promise<void> {
+  const db = await openDB();
+  return new Promise<void>((res, rej) => {
+    const tx = db.transaction(TRANSCRIPT_STORE_NAME, 'readwrite');
+    tx.objectStore(TRANSCRIPT_STORE_NAME).put(text, id);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+export async function loadCachedTranscript(id: string): Promise<string | null> {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(TRANSCRIPT_STORE_NAME, 'readonly');
+    const req = tx.objectStore(TRANSCRIPT_STORE_NAME).get(id);
+    req.onsuccess = () => res(req.result ?? null);
+    req.onerror = () => rej(tx.error);
+  });
+}
+
+export async function saveCachedAudio(id: string, blob: Blob): Promise<void> {
+  const db = await openDB();
+  return new Promise<void>((res, rej) => {
+    const tx = db.transaction(AUDIO_STORE_NAME, 'readwrite');
+    tx.objectStore(AUDIO_STORE_NAME).put(blob, id);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+export async function loadCachedAudio(id: string): Promise<Blob | null> {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(AUDIO_STORE_NAME, 'readonly');
+    const req = tx.objectStore(AUDIO_STORE_NAME).get(id);
+    req.onsuccess = () => res(req.result ?? null);
     req.onerror = () => rej(req.error);
   });
 }

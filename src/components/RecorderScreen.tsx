@@ -2,10 +2,9 @@ import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import { FolderOpen, Mic, Pause, Play, Square } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { audioRecorder } from '../services/audioRecorder';
-import { transcribe } from '../services/transcription';
 import {
   saveAudio,
-  saveTranscript,
+  saveCachedAudio,
   pickProjectDir,
   generateTimestamp,
   formatDuration,
@@ -23,7 +22,7 @@ export function RecorderScreen() {
     elapsedSeconds, setElapsedSeconds,
     autoStopEnabled, setAutoStopEnabled,
     autoStopMinutes, setAutoStopMinutes,
-    activeProvider, providers, prompt,
+    activeProvider, providers,
     addRecording, updateRecording, rootFolderName,
   } = useStore();
 
@@ -134,9 +133,24 @@ export function RecorderScreen() {
     const project = currentProject || 'General';
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+    try {
+      await saveCachedAudio(id, blob);
+    } catch {
+      // Disk save below remains the primary user-visible copy.
+    }
+
+    let audioName = `${baseName}.mp3`;
+    try {
+      audioName = await saveAudio(blob, project, baseName);
+      setStatusMsg('Audio guardado. Puedes transcribirlo desde Historial.');
+    } catch (err) {
+      setStatusMsg(`Audio guardado en la app. ${(err as Error).message}`);
+    }
+
     const rec: Recording = {
       id,
-      name: baseName,
+      name: audioName.replace(/\.mp3$/i, ''),
+      audioName,
       project,
       timestamp: Date.now(),
       duration,
@@ -144,33 +158,7 @@ export function RecorderScreen() {
       transcribed: false,
     };
     addRecording(rec);
-
-    let audioName = `${baseName}.mp3`;
-    try {
-      audioName = await saveAudio(blob, project, baseName);
-      setStatusMsg('Transcribiendo...');
-    } catch (err) {
-      setStatusMsg(`Audio guardado localmente. ${(err as Error).message}`);
-    }
-
-    const provider = providers.find((p) => p.id === activeProvider);
-    if (provider?.apiKey) {
-      try {
-        const text = await transcribe(blob, provider, prompt);
-        await saveTranscript(text, project, audioName);
-        updateRecording(id, { transcribed: true, name: audioName.replace('.mp3', '') });
-        setStatusMsg('Transcripcion completada.');
-      } catch (err) {
-        updateRecording(id, {
-          transcriptionError: (err as Error).message,
-          name: audioName.replace('.mp3', ''),
-        });
-        setStatusMsg(`Audio guardado. Transcripcion fallo: ${(err as Error).message}`);
-      }
-    } else {
-      updateRecording(id, { name: audioName.replace('.mp3', '') });
-      setStatusMsg('Audio guardado. Configura una API key para transcribir.');
-    }
+    updateRecording(id, { audioName, name: audioName.replace(/\.mp3$/i, '') });
 
     setRecordingStatus('idle');
     setCurrentName(generateTimestamp());
