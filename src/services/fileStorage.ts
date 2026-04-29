@@ -65,12 +65,32 @@ export async function pickProjectDir(): Promise<string> {
 // ── Keys file picker ───────────────────────────────────────────────────────
 
 export async function pickKeysFile(): Promise<Record<string, string>> {
+  if (typeof (window as any).showOpenFilePicker !== 'function') {
+    const file = await pickFileWithInput('.txt,.env,text/plain');
+    return parseKeys(await file.text());
+  }
+
   const [fh] = await (window as any).showOpenFilePicker({
-    types: [{ description: 'Archivo de claves', accept: { 'text/plain': ['.txt', '.env', ''] } }],
+    types: [{ description: 'Archivo de claves', accept: { 'text/plain': ['.txt', '.env'] } }],
     startIn: 'downloads',
   });
   const file = await fh.getFile();
   return parseKeys(await file.text());
+}
+
+function pickFileWithInput(accept: string): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (file) resolve(file);
+      else reject(new Error('No se selecciono ningun archivo'));
+    };
+    input.oncancel = () => reject(new Error('Seleccion cancelada'));
+    input.click();
+  });
 }
 
 export function parseKeys(text: string): Record<string, string> {

@@ -1,15 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
-import {
-  Mic, Square, Pause, Play, FolderOpen, Clock, ChevronDown, ChevronUp,
-} from 'lucide-react';
+import { type ChangeEvent, useEffect, useRef, useState } from 'react';
+import { FolderOpen, Mic, Pause, Play, Square } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { audioRecorder } from '../services/audioRecorder';
 import { transcribe } from '../services/transcription';
 import {
-  saveAudio, saveTranscript, pickProjectDir,
-  generateTimestamp, formatDuration, isFileSystemSupported,
+  saveAudio,
+  saveTranscript,
+  pickProjectDir,
+  generateTimestamp,
+  formatDuration,
+  isFileSystemSupported,
 } from '../services/fileStorage';
 import { Recording } from '../types';
+
+const LARGE_AUDIO_WARNING_MB = 20;
 
 export function RecorderScreen() {
   const {
@@ -23,12 +27,10 @@ export function RecorderScreen() {
     addRecording, updateRecording, rootFolderName,
   } = useStore();
 
-  const [showSettings, setShowSettings] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
-  const autoStopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const recordingIdRef = useRef<string>('');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const stoppingRef = useRef(false);
 
-  // Initialise name once on mount
   useEffect(() => {
     if (!currentName) setCurrentName(generateTimestamp());
   }, []);
@@ -38,14 +40,21 @@ export function RecorderScreen() {
   const isPaused = recordingStatus === 'paused';
   const isProcessing = recordingStatus === 'processing';
 
-  // ── Timer display ─────────────────────────────────────────────────────────
   const remainingSec = autoStopEnabled
     ? Math.max(0, autoStopMinutes * 60 - elapsedSeconds)
     : elapsedSeconds;
-
   const timerLabel = formatDuration(remainingSec);
 
-  // ── Actions ───────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (
+      isRecording &&
+      autoStopEnabled &&
+      elapsedSeconds >= autoStopMinutes * 60 &&
+      !stoppingRef.current
+    ) {
+      void handleStop();
+    }
+  }, [isRecording, autoStopEnabled, autoStopMinutes, elapsedSeconds]);
 
   async function handleStart() {
     try {
@@ -54,15 +63,12 @@ export function RecorderScreen() {
       setElapsedSeconds(0);
       setRecordingStatus('recording');
       setStatusMsg('');
+      stoppingRef.current = false;
 
       await audioRecorder.start((s) => setElapsedSeconds(s));
-
-      if (autoStopEnabled) {
-        autoStopRef.current = setTimeout(handleStop, autoStopMinutes * 60 * 1000);
-      }
     } catch (err) {
       setRecordingStatus('idle');
-      setStatusMsg(`Error al acceder al micrófono: ${(err as Error).message}`);
+      setStatusMsg(`Error al acceder al microfono: ${(err as Error).message}`);
     }
   }
 
@@ -77,55 +83,89 @@ export function RecorderScreen() {
   }
 
   async function handleStop() {
-    if (autoStopRef.current) clearTimeout(autoStopRef.current);
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
     setRecordingStatus('processing');
-    setStatusMsg('Guardando audio…');
+    setStatusMsg('Guardando audio...');
 
     let blob: Blob;
     try {
       blob = await audioRecorder.stop();
     } catch (err) {
       setRecordingStatus('idle');
+      stoppingRef.current = false;
       setStatusMsg(`Error al detener: ${(err as Error).message}`);
       return;
     }
 
-    const duration = elapsedSeconds;
+    await processAudioBlob(blob, elapsedSeconds, currentName || generateTimestamp());
+  }
+
+  async function handleFileSelected(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    if (!/\.mp3$/i.test(file.name) && file.type !== 'audio/mpeg') {
+      setStatusMsg('Selecciona un archivo MP3.');
+      return;
+    }
+
+    if (file.size > LARGE_AUDIO_WARNING_MB * 1024 * 1024) {
+      const ok = window.confirm(
+        `El MP3 pesa ${(file.size / (1024 * 1024)).toFixed(1)} MB. ` +
+        `Algunos proveedores rechazan archivos de mas de ${LARGE_AUDIO_WARNING_MB} MB. ` +
+        'Puedes guardarlo e intentar transcribirlo igualmente?'
+      );
+      if (!ok) return;
+    }
+
+    const baseName = file.name.replace(/\.mp3$/i, '') || generateTimestamp();
+    setCurrentName(baseName);
+    setElapsedSeconds(0);
+    setRecordingStatus('processing');
+    setStatusMsg('Cargando MP3...');
+
+    const duration = await getAudioDuration(file).catch(() => 0);
+    await processAudioBlob(file, duration, baseName);
+  }
+
+  async function processAudioBlob(blob: Blob, duration: number, baseName: string) {
     const project = currentProject || 'General';
-    const baseName = currentName || generateTimestamp();
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    recordingIdRef.current = id;
 
     const rec: Recording = {
-      id, name: baseName, project,
-      timestamp: Date.now(), duration,
-      fileSize: blob.size, transcribed: false,
+      id,
+      name: baseName,
+      project,
+      timestamp: Date.now(),
+      duration,
+      fileSize: blob.size,
+      transcribed: false,
     };
     addRecording(rec);
 
-    // Save MP3
     let audioName = `${baseName}.mp3`;
     try {
       audioName = await saveAudio(blob, project, baseName);
-      setStatusMsg('Transcribiendo…');
+      setStatusMsg('Transcribiendo...');
     } catch (err) {
       setStatusMsg(`Audio guardado localmente. ${(err as Error).message}`);
     }
 
-    // Transcribe
     const provider = providers.find((p) => p.id === activeProvider);
     if (provider?.apiKey) {
       try {
         const text = await transcribe(blob, provider, prompt);
         await saveTranscript(text, project, audioName);
         updateRecording(id, { transcribed: true, name: audioName.replace('.mp3', '') });
-        setStatusMsg('¡Transcripción completada!');
+        setStatusMsg('Transcripcion completada.');
       } catch (err) {
         updateRecording(id, {
           transcriptionError: (err as Error).message,
           name: audioName.replace('.mp3', ''),
         });
-        setStatusMsg(`Audio guardado. Transcripción falló: ${(err as Error).message}`);
+        setStatusMsg(`Audio guardado. Transcripcion fallo: ${(err as Error).message}`);
       }
     } else {
       updateRecording(id, { name: audioName.replace('.mp3', '') });
@@ -134,29 +174,46 @@ export function RecorderScreen() {
 
     setRecordingStatus('idle');
     setCurrentName(generateTimestamp());
+    stoppingRef.current = false;
     setTimeout(() => setStatusMsg(''), 6000);
+  }
+
+  function getAudioDuration(file: File): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const audio = document.createElement('audio');
+      const url = URL.createObjectURL(file);
+      audio.preload = 'metadata';
+      audio.onloadedmetadata = () => {
+        URL.revokeObjectURL(url);
+        resolve(Number.isFinite(audio.duration) ? audio.duration : 0);
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('No se pudo leer la duracion del audio'));
+      };
+      audio.src = url;
+    });
   }
 
   async function handlePickProject() {
     try {
       const name = await pickProjectDir();
       setCurrentProject(name);
-    } catch { /* user cancelled */ }
+    } catch {
+      // User cancelled.
+    }
   }
-
-  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="screen flex flex-col gap-6 pb-4">
-      {/* Header */}
       <div className="text-center pt-2">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">VoiceNote</h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Grabadora con transcripción IA</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+          Grabadora con transcripcion IA
+        </p>
       </div>
 
-      {/* Project + Name */}
       <div className="card flex flex-col gap-3">
-        {/* Project row */}
         <div>
           <label className="field-label">Proyecto / Carpeta</label>
           <div className="flex gap-2">
@@ -180,7 +237,6 @@ export function RecorderScreen() {
           </div>
         </div>
 
-        {/* Name row */}
         <div>
           <label className="field-label">Nombre del archivo</label>
           <input
@@ -193,7 +249,6 @@ export function RecorderScreen() {
         </div>
       </div>
 
-      {/* Timer display */}
       <div className="flex flex-col items-center gap-1">
         <div className={`timer-display ${isRecording ? 'text-brand-500' : isPaused ? 'text-amber-500' : 'text-gray-400 dark:text-gray-600'}`}>
           {timerLabel}
@@ -205,11 +260,12 @@ export function RecorderScreen() {
           <p className="text-xs text-amber-500 font-medium">PAUSADO</p>
         )}
         {isProcessing && (
-          <p className="text-xs text-brand-500 animate-pulse font-medium">{statusMsg || 'Procesando…'}</p>
+          <p className="text-xs text-brand-500 animate-pulse font-medium">
+            {statusMsg || 'Procesando...'}
+          </p>
         )}
       </div>
 
-      {/* Waveform indicator */}
       {isRecording && (
         <div className="flex items-center justify-center gap-1 h-8">
           {Array.from({ length: 9 }).map((_, i) => (
@@ -218,16 +274,32 @@ export function RecorderScreen() {
         </div>
       )}
 
-      {/* Main buttons */}
       <div className="flex items-center justify-center gap-6">
-        {/* Pause/Resume — only when recording/paused */}
+        {isIdle && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="audio/mpeg,.mp3"
+              className="hidden"
+              onChange={handleFileSelected}
+            />
+            <button
+              className="secondary-btn"
+              title="Cargar archivo MP3"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <FolderOpen size={22} />
+            </button>
+          </>
+        )}
+
         {(isRecording || isPaused) && (
           <button className="secondary-btn" onClick={handlePause}>
             {isRecording ? <Pause size={22} /> : <Play size={22} />}
           </button>
         )}
 
-        {/* REC / STOP */}
         {isIdle ? (
           <button className="rec-btn" onClick={handleStart}>
             <Mic size={32} />
@@ -243,71 +315,49 @@ export function RecorderScreen() {
         )}
       </div>
 
-      {/* Provider indicator */}
       <div className="text-center">
         <span className="text-xs text-gray-400 dark:text-gray-500">
-          Proveedor: <span className="font-medium text-gray-600 dark:text-gray-300">
+          Proveedor:{' '}
+          <span className="font-medium text-gray-600 dark:text-gray-300">
             {providers.find((p) => p.id === activeProvider)?.name ?? activeProvider}
           </span>
           {!rootFolderName && isFileSystemSupported() && (
-            <span className="ml-2 text-amber-500">· carpeta no configurada</span>
+            <span className="ml-2 text-amber-500">carpeta no configurada</span>
           )}
         </span>
       </div>
 
-      {/* Status message (success/error) */}
       {statusMsg && !isProcessing && (
         <div className="text-center text-sm text-gray-500 dark:text-gray-400 px-4">
           {statusMsg}
         </div>
       )}
 
-      {/* Auto-stop settings */}
-      <div className="card">
-        <button
-          className="flex items-center justify-between w-full text-sm font-medium text-gray-700 dark:text-gray-300"
-          onClick={() => setShowSettings((v) => !v)}
-        >
-          <span className="flex items-center gap-2">
-            <Clock size={16} />
-            Parada automática
-            {autoStopEnabled && (
-              <span className="badge">{autoStopMinutes} min</span>
-            )}
+      <div className="card flex items-center justify-between gap-3">
+        <label className="flex items-center gap-3 cursor-pointer min-w-0">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-500"
+            checked={autoStopEnabled}
+            onChange={(e) => setAutoStopEnabled(e.target.checked)}
+            disabled={isRecording || isPaused || isProcessing}
+          />
+          <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            Parada automatica
           </span>
-          {showSettings ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-        </button>
-
-        {showSettings && (
-          <div className="mt-3 flex flex-col gap-3">
-            <label className="flex items-center gap-3 cursor-pointer">
-              <div
-                className={`toggle ${autoStopEnabled ? 'toggle-on' : 'toggle-off'}`}
-                onClick={() => setAutoStopEnabled(!autoStopEnabled)}
-              >
-                <div className="toggle-thumb" />
-              </div>
-              <span className="text-sm text-gray-600 dark:text-gray-400">
-                {autoStopEnabled ? 'Activada' : 'Desactivada'}
-              </span>
-            </label>
-
-            {autoStopEnabled && (
-              <div>
-                <label className="field-label">Minutos</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={480}
-                  className="field w-28"
-                  value={autoStopMinutes}
-                  onChange={(e) => setAutoStopMinutes(Number(e.target.value))}
-                  disabled={isRecording || isPaused}
-                />
-              </div>
-            )}
-          </div>
-        )}
+        </label>
+        <div className="flex items-center gap-2 shrink-0">
+          <input
+            type="number"
+            min={1}
+            max={480}
+            className="field w-20 text-center"
+            value={autoStopMinutes}
+            onChange={(e) => setAutoStopMinutes(Math.max(1, Number(e.target.value) || 1))}
+            disabled={!autoStopEnabled || isRecording || isPaused || isProcessing}
+          />
+          <span className="text-sm text-gray-500 dark:text-gray-400">min</span>
+        </div>
       </div>
     </div>
   );

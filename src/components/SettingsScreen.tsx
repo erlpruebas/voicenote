@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Key, ChevronDown, ChevronUp, Plus, Trash2, FolderOpen,
-  FileKey, RotateCcw, CheckCircle2, Eye, EyeOff,
+  FileKey, RotateCcw, CheckCircle2, Eye, EyeOff, Save,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { pickKeysFile, pickRootDir, isFileSystemSupported } from '../services/fileStorage';
@@ -22,6 +22,12 @@ export function SettingsScreen() {
   const [keysLoaded, setKeysLoaded] = useState(false);
   const [folderMsg, setFolderMsg] = useState('');
   const [visibleKeys, setVisibleKeys] = useState<Record<string, boolean>>({});
+  const [localPrompt, setLocalPrompt] = useState(prompt);
+  const [promptSaved, setPromptSaved] = useState(false);
+
+  useEffect(() => {
+    setLocalPrompt(prompt);
+  }, [prompt]);
 
   // ── Keys file ─────────────────────────────────────────────────────────────
 
@@ -61,6 +67,17 @@ export function SettingsScreen() {
     addProvider(p);
     setNewProvider({});
     setShowAddProvider(false);
+  }
+
+  function handleSavePrompt() {
+    setPrompt(localPrompt);
+    setPromptSaved(true);
+    setTimeout(() => setPromptSaved(false), 3000);
+  }
+
+  function handleResetPrompt() {
+    resetPrompt();
+    setPromptSaved(false);
   }
 
   return (
@@ -116,7 +133,7 @@ export function SettingsScreen() {
 
       {/* ── Proveedores ───────────────────────────────────────────────────── */}
       <section className="flex flex-col gap-2">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3">
           <h3 className="section-title">Proveedores</h3>
           <span className="text-xs text-gray-400">Activo: <span className="font-medium text-brand-500">
             {providers.find(p => p.id === activeProvider)?.name}
@@ -265,19 +282,36 @@ export function SettingsScreen() {
       <section className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <h3 className="section-title">Prompt de transcripción</h3>
-          <button
-            className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600"
-            onClick={resetPrompt}
-          >
-            <RotateCcw size={11} /> Restablecer
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600"
+              onClick={handleResetPrompt}
+            >
+              <RotateCcw size={11} /> Restablecer
+            </button>
+            <button
+              className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1"
+              onClick={handleSavePrompt}
+              disabled={localPrompt === prompt}
+            >
+              <Save size={12} /> Guardar
+            </button>
+          </div>
         </div>
         <div className="card">
           <textarea
             className="field resize-none text-sm leading-relaxed min-h-32"
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
+            value={localPrompt}
+            onChange={(e) => {
+              setLocalPrompt(e.target.value);
+              setPromptSaved(false);
+            }}
           />
+          {promptSaved && (
+            <p className="text-xs text-green-600 dark:text-green-400 mt-2 flex items-center gap-1">
+              <CheckCircle2 size={12} /> Prompt guardado
+            </p>
+          )}
           <p className="text-xs text-gray-400 mt-2">
             Este texto se envía junto al audio al modelo de lenguaje para guiar la transcripción.
           </p>
