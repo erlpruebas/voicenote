@@ -18,6 +18,7 @@ declare global {
 }
 
 type DurationCallback = (seconds: number) => void;
+type LevelCallback = (level: number) => void;
 
 class AudioRecorder {
   private audioContext: AudioContext | null = null;
@@ -33,9 +34,12 @@ class AudioRecorder {
   private wakeLock: WakeLockSentinel | null = null;
   private timerInterval: ReturnType<typeof setInterval> | null = null;
   private onDuration: DurationCallback | null = null;
+  private onLevel: LevelCallback | null = null;
+  private lastLevelAt = 0;
 
-  async start(onDuration: DurationCallback): Promise<void> {
+  async start(onDuration: DurationCallback, onLevel?: LevelCallback): Promise<void> {
     this.onDuration = onDuration;
+    this.onLevel = onLevel ?? null;
     const Mp3Encoder = window.lamejs?.Mp3Encoder;
     if (!Mp3Encoder) throw new Error('No se pudo cargar el codificador MP3');
 
@@ -61,6 +65,7 @@ class AudioRecorder {
     this.processor.onaudioprocess = (e) => {
       if (this._paused) return;
       const pcm = e.inputBuffer.getChannelData(0);
+      this.emitLevel(pcm);
       const int16 = this.toInt16(pcm);
       const chunk = this.encoder!.encodeBuffer(int16);
       if (chunk.length > 0) this.mp3Chunks.push(new Int8Array(chunk));
@@ -122,6 +127,8 @@ class AudioRecorder {
     this.source = null;
     this.processor = null;
     this.encoder = null;
+    this.onLevel = null;
+    this.lastLevelAt = 0;
     this.mp3Chunks = [];
 
     return blob;
@@ -144,6 +151,25 @@ class AudioRecorder {
       out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
     return out;
+  }
+
+  private emitLevel(pcm: Float32Array) {
+    if (!this.onLevel) return;
+    const now = performance.now();
+    if (now - this.lastLevelAt < 80) return;
+    this.lastLevelAt = now;
+
+    let sum = 0;
+    let peak = 0;
+    for (let i = 0; i < pcm.length; i++) {
+      const sample = Math.abs(pcm[i]);
+      sum += sample * sample;
+      if (sample > peak) peak = sample;
+    }
+
+    const rms = Math.sqrt(sum / pcm.length);
+    const level = Math.min(1, Math.max(peak, rms * 3.5));
+    this.onLevel(level);
   }
 
   private setupMediaSession() {

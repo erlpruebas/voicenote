@@ -27,6 +27,7 @@ export function RecorderScreen() {
   } = useStore();
 
   const [statusMsg, setStatusMsg] = useState('');
+  const [inputLevel, setInputLevel] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const stoppingRef = useRef(false);
 
@@ -62,9 +63,13 @@ export function RecorderScreen() {
       setElapsedSeconds(0);
       setRecordingStatus('recording');
       setStatusMsg('');
+      setInputLevel(0);
       stoppingRef.current = false;
 
-      await audioRecorder.start((s) => setElapsedSeconds(s));
+      await audioRecorder.start(
+        (s) => setElapsedSeconds(s),
+        (level) => setInputLevel((prev) => prev * 0.65 + level * 0.35)
+      );
     } catch (err) {
       setRecordingStatus('idle');
       setStatusMsg(`Error al acceder al microfono: ${(err as Error).message}`);
@@ -92,6 +97,7 @@ export function RecorderScreen() {
       blob = await audioRecorder.stop();
     } catch (err) {
       setRecordingStatus('idle');
+      setInputLevel(0);
       stoppingRef.current = false;
       setStatusMsg(`Error al detener: ${(err as Error).message}`);
       return;
@@ -162,6 +168,7 @@ export function RecorderScreen() {
 
     setRecordingStatus('idle');
     setCurrentName(generateTimestamp());
+    setInputLevel(0);
     stoppingRef.current = false;
     setTimeout(() => setStatusMsg(''), 6000);
   }
@@ -254,11 +261,28 @@ export function RecorderScreen() {
         )}
       </div>
 
-      {isRecording && (
-        <div className="flex items-center justify-center gap-1 h-8">
-          {Array.from({ length: 9 }).map((_, i) => (
-            <div key={i} className="wave-bar" style={{ animationDelay: `${i * 0.1}s` }} />
-          ))}
+      {(isRecording || isPaused) && (
+        <div className="px-2">
+          <div className="h-8 flex items-center gap-3">
+            <div className="relative h-4 flex-1 rounded-full overflow-hidden bg-gray-200 dark:bg-gray-800">
+              <div className="absolute inset-0 grid grid-cols-[1fr_0.45fr_0.28fr]">
+                <div className="bg-green-500" />
+                <div className="bg-yellow-400" />
+                <div className="bg-red-500" />
+              </div>
+              <div
+                className="absolute inset-y-0 right-0 bg-white/75 dark:bg-gray-950/75 transition-[width] duration-100"
+                style={{ width: `${Math.max(0, 100 - inputLevel * 100)}%` }}
+              />
+              <div
+                className="absolute top-0 h-full w-1 -ml-0.5 bg-white shadow transition-[left] duration-100"
+                style={{ left: `${Math.min(100, inputLevel * 100)}%` }}
+              />
+            </div>
+            <span className="w-9 text-right text-xs font-mono text-gray-400">
+              {Math.round(inputLevel * 100)}
+            </span>
+          </div>
         </div>
       )}
 
