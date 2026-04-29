@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  X, Play, Pause, SkipBack, SkipForward, RefreshCw,
+  X, Play, Pause, SkipBack, SkipForward, RefreshCw, ChevronLeft, ChevronRight,
   FileText, Volume2, Loader2,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
@@ -14,11 +14,12 @@ import {
 } from '../services/fileStorage';
 import { transcribe } from '../services/transcription';
 import { saveTranscript } from '../services/fileStorage';
+import { estimateGeminiTranscriptionCostUsd, formatUsd } from '../services/cost';
 
 type Tab = 'audio' | 'transcript';
 
 export function PlayerModal() {
-  const { selectedRecording, setSelectedRecording, providers, activeProvider, prompt, updateRecording } =
+  const { selectedRecording, setSelectedRecording, recordings, providers, activeProvider, prompt, updateRecording } =
     useStore();
 
   const [tab, setTab] = useState<Tab>('audio');
@@ -34,6 +35,11 @@ export function PlayerModal() {
   const blobUrlRef = useRef<string>('');
 
   const rec = selectedRecording;
+  const currentIndex = rec ? recordings.findIndex((r) => r.id === rec.id) : -1;
+  const prevRecording = currentIndex > 0 ? recordings[currentIndex - 1] : null;
+  const nextRecording = currentIndex >= 0 && currentIndex < recordings.length - 1
+    ? recordings[currentIndex + 1]
+    : null;
 
   useEffect(() => {
     if (!rec) return;
@@ -125,8 +131,16 @@ export function PlayerModal() {
       const text = await transcribe(blob, provider, prompt);
       await saveTranscript(text, r.project, audioName);
       await saveCachedTranscript(r.id, text);
+      const cost = provider.id === 'gemini'
+        ? estimateGeminiTranscriptionCostUsd(r.duration, text)
+        : undefined;
       setTranscript(text);
-      updateRecording(r.id, { transcribed: true, transcriptionError: undefined });
+      updateRecording(r.id, {
+        transcribed: true,
+        transcriptionError: undefined,
+        transcriptionCostUsd: cost,
+      });
+      setSelectedRecording({ ...r, transcribed: true, transcriptionError: undefined, transcriptionCostUsd: cost });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -158,6 +172,22 @@ export function PlayerModal() {
           <p className="font-semibold text-gray-900 dark:text-white truncate text-sm">{rec.name}</p>
           <p className="text-xs text-gray-400">{rec.project} · {new Date(rec.timestamp).toLocaleDateString('es-ES')}</p>
         </div>
+        <button
+          className="icon-btn disabled:opacity-30"
+          title="Anterior"
+          disabled={!prevRecording}
+          onClick={() => prevRecording && setSelectedRecording(prevRecording)}
+        >
+          <ChevronLeft size={18} />
+        </button>
+        <button
+          className="icon-btn disabled:opacity-30"
+          title="Siguiente"
+          disabled={!nextRecording}
+          onClick={() => nextRecording && setSelectedRecording(nextRecording)}
+        >
+          <ChevronRight size={18} />
+        </button>
       </div>
 
       {/* Tabs */}
@@ -188,6 +218,11 @@ export function PlayerModal() {
             <div className="text-center">
               <p className="font-bold text-gray-900 dark:text-white text-lg">{rec.name}</p>
               <p className="text-gray-400 text-sm">{rec.project}</p>
+              {rec.transcriptionCostUsd !== undefined && (
+                <p className="text-xs text-gray-400 mt-1">
+                  Coste aprox. {formatUsd(rec.transcriptionCostUsd)}
+                </p>
+              )}
             </div>
 
             {/* Progress bar */}

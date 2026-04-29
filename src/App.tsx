@@ -20,12 +20,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex flex-col max-w-lg mx-auto relative">
+      <BottomNav />
       <main className="flex-1 overflow-y-auto px-4">
         {activeTab === 'record'   && <RecorderScreen />}
         {activeTab === 'history'  && <HistoryScreen />}
         {activeTab === 'settings' && <SettingsScreen />}
       </main>
-      <BottomNav />
     </div>
   );
 }

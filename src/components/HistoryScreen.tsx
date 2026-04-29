@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Mic2, FileText, Trash2, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { formatDuration, formatSize } from '../services/fileStorage';
+import { formatUsd } from '../services/cost';
 
 export function HistoryScreen() {
   const { recordings, removeRecording, setSelectedRecording, setActiveTab } = useStore();
@@ -82,6 +83,12 @@ export function HistoryScreen() {
                       <span>{formatDuration(rec.duration)}</span>
                       <span>·</span>
                       <span>{formatSize(rec.fileSize)}</span>
+                      {rec.transcriptionCostUsd !== undefined && (
+                        <>
+                          <span>Â·</span>
+                          <span>{formatUsd(rec.transcriptionCostUsd)}</span>
+                        </>
+                      )}
                     </div>
                     {rec.transcriptionError && (
                       <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5 truncate">

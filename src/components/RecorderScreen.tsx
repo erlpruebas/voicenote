@@ -2,14 +2,18 @@ import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import { FolderOpen, Mic, Pause, Play, Square } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { audioRecorder } from '../services/audioRecorder';
+import { transcribe } from '../services/transcription';
 import {
   saveAudio,
   saveCachedAudio,
+  saveCachedTranscript,
+  saveTranscript,
   pickProjectDir,
   generateTimestamp,
   formatDuration,
   isFileSystemSupported,
 } from '../services/fileStorage';
+import { estimateGeminiTranscriptionCostUsd, formatUsd } from '../services/cost';
 import { Recording } from '../types';
 
 const LARGE_AUDIO_WARNING_MB = 20;
@@ -23,7 +27,7 @@ export function RecorderScreen() {
     autoStopEnabled, setAutoStopEnabled,
     autoStopMinutes, setAutoStopMinutes,
     recordingGain, setRecordingGain,
-    activeProvider, providers,
+    activeProvider, providers, prompt,
     addRecording, updateRecording, rootFolderName,
   } = useStore();
 
@@ -109,7 +113,7 @@ export function RecorderScreen() {
       return;
     }
 
-    await processAudioBlob(blob, elapsedSeconds, currentName || generateTimestamp());
+    await processAudioBlob(blob, elapsedSeconds, currentName || generateTimestamp(), true);
   }
 
   async function handleFileSelected(e: ChangeEvent<HTMLInputElement>) {
@@ -138,10 +142,10 @@ export function RecorderScreen() {
     setStatusMsg('Cargando MP3...');
 
     const duration = await getAudioDuration(file).catch(() => 0);
-    await processAudioBlob(file, duration, baseName);
+    await processAudioBlob(file, duration, baseName, false);
   }
 
-  async function processAudioBlob(blob: Blob, duration: number, baseName: string) {
+  async function processAudioBlob(blob: Blob, duration: number, baseName: string, autoTranscribe: boolean) {
     const project = currentProject || 'General';
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
@@ -171,6 +175,34 @@ export function RecorderScreen() {
     };
     addRecording(rec);
     updateRecording(id, { audioName, name: audioName.replace(/\.mp3$/i, '') });
+
+    if (autoTranscribe) {
+      const provider = providers.find((p) => p.id === activeProvider);
+      if (provider?.apiKey) {
+        setStatusMsg('Transcribiendo...');
+        try {
+          const text = await transcribe(blob, provider, prompt);
+          await saveTranscript(text, project, audioName);
+          await saveCachedTranscript(id, text);
+          const cost = provider.id === 'gemini'
+            ? estimateGeminiTranscriptionCostUsd(duration, text)
+            : undefined;
+          updateRecording(id, {
+            transcribed: true,
+            transcriptionError: undefined,
+            transcriptionCostUsd: cost,
+          });
+          setStatusMsg(cost
+            ? `Transcripcion completada. Coste aprox. ${formatUsd(cost)}.`
+            : 'Transcripcion completada.');
+        } catch (err) {
+          updateRecording(id, { transcriptionError: (err as Error).message });
+          setStatusMsg(`Audio guardado. Transcripcion fallo: ${(err as Error).message}`);
+        }
+      } else {
+        setStatusMsg('Audio guardado. Configura una API key para transcribir.');
+      }
+    }
 
     setRecordingStatus('idle');
     setCurrentName(generateTimestamp());
@@ -211,14 +243,7 @@ export function RecorderScreen() {
   }
 
   return (
-    <div className="screen flex flex-col gap-6 pb-4">
-      <div className="text-center pt-2">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">VoiceNote</h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-          Grabadora con transcripcion IA
-        </p>
-      </div>
-
+    <div className="screen flex flex-col gap-5 pb-4">
       <div className="card flex flex-col gap-3">
         <div>
           <label className="field-label">Proyecto / Carpeta</label>
@@ -338,24 +363,40 @@ export function RecorderScreen() {
         )}
       </div>
 
-      <div className="text-center">
-        <span className="text-xs text-gray-400 dark:text-gray-500">
-          Proveedor:{' '}
-          <span className="font-medium text-gray-600 dark:text-gray-300">
-            {providers.find((p) => p.id === activeProvider)?.name ?? activeProvider}
-          </span>
-          {!rootFolderName && isFileSystemSupported() && (
-            <span className="ml-2 text-amber-500">carpeta no configurada</span>
-          )}
-        </span>
-      </div>
-
       {statusMsg && !isProcessing && (
         <div className="text-center text-sm text-gray-500 dark:text-gray-400 px-4">
           {statusMsg}
         </div>
       )}
 
+      <div className="card flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-3">
+          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            Ganancia de entrada
+          </label>
+          <span className="text-xs font-mono text-gray-500 dark:text-gray-400">
+            {recordingGain.toFixed(1)}x
+          </span>
+        </div>
+        <input
+          type="range"
+          min={0.5}
+          max={5}
+          step={0.1}
+          value={recordingGain}
+          onInput={(e) => handleGainChange(Number(e.currentTarget.value))}
+          onChange={(e) => handleGainChange(Number(e.currentTarget.value))}
+          disabled={isProcessing}
+          className="progress-slider"
+        />
+        <div className="flex justify-between text-[11px] text-gray-400">
+          <span>0.5x</span>
+          <span>1x</span>
+          <span>5x</span>
+        </div>
+      </div>
+
+      {!isRecording && !isPaused && (
       <div className="card flex items-center justify-between gap-3">
         <label className="flex items-center gap-3 cursor-pointer min-w-0">
           <input
@@ -382,32 +423,18 @@ export function RecorderScreen() {
           <span className="text-sm text-gray-500 dark:text-gray-400">min</span>
         </div>
       </div>
+      )}
 
-      <div className="card flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-3">
-          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-            Ganancia de entrada
-          </label>
-          <span className="text-xs font-mono text-gray-500 dark:text-gray-400">
-            {recordingGain.toFixed(1)}x
+      <div className="mt-auto text-center">
+        <span className="text-xs text-gray-400 dark:text-gray-500">
+          Proveedor:{' '}
+          <span className="font-medium text-gray-600 dark:text-gray-300">
+            {providers.find((p) => p.id === activeProvider)?.name ?? activeProvider}
           </span>
-        </div>
-        <input
-          type="range"
-          min={0.5}
-          max={3}
-          step={0.1}
-          value={recordingGain}
-          onInput={(e) => handleGainChange(Number(e.currentTarget.value))}
-          onChange={(e) => handleGainChange(Number(e.currentTarget.value))}
-          disabled={isProcessing}
-          className="progress-slider"
-        />
-        <div className="flex justify-between text-[11px] text-gray-400">
-          <span>0.5x</span>
-          <span>1x</span>
-          <span>3x</span>
-        </div>
+          {!rootFolderName && isFileSystemSupported() && (
+            <span className="ml-2 text-amber-500">carpeta no configurada</span>
+          )}
+        </span>
       </div>
     </div>
   );

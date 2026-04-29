@@ -6,15 +6,17 @@ const DEFAULT_PROMPT =
   'Transcribe literalmente todo el contenido del audio en espanol, sin resumir ni interpretar. ' +
   'Devuelve unicamente la transcripcion, sin introducciones, sin comentarios y sin formato Markdown. ' +
   'Anade puntuacion natural para que el texto se lea como un texto normal: puntos, comas, signos de interrogacion y signos de exclamacion cuando correspondan por el sentido, las pausas y la entonacion. ' +
-  'Agrupa las frases en parrafos naturales. Crea un nuevo parrafo cuando cambie la idea, el tema, el hablante, el momento del discurso o cuando haya una pausa clara. ' +
-  'Evita poner cada frase en una linea separada. ' +
+  'Forma un texto natural y correcto, con frases completas y parrafos normales de varias frases cuando corresponda. ' +
+  'Crea un nuevo parrafo solo cuando cambie claramente la idea, el tema, el hablante, el momento del discurso o haya una pausa importante. ' +
+  'No pongas cada frase en una linea separada y no conviertas la transcripcion en una lista vertical. ' +
   'Manten nombres propios, terminos especificos y detalles relevantes lo mas fielmente posible. ' +
   'No inventes contenido que no este en el audio.';
 
 const FORMATTING_PROMPT =
   'Anade puntuacion natural para que el texto se lea como un texto normal: puntos, comas, signos de interrogacion y signos de exclamacion cuando correspondan por el sentido, las pausas y la entonacion. ' +
-  'Agrupa las frases en parrafos naturales. Crea un nuevo parrafo cuando cambie la idea, el tema, el hablante, el momento del discurso o cuando haya una pausa clara. ' +
-  'Evita poner cada frase en una linea separada.';
+  'Forma un texto natural y correcto, con frases completas y parrafos normales de varias frases cuando corresponda. ' +
+  'Crea un nuevo parrafo solo cuando cambie claramente la idea, el tema, el hablante, el momento del discurso o haya una pausa importante. ' +
+  'No pongas cada frase en una linea separada y no conviertas la transcripcion en una lista vertical.';
 
 const DEFAULT_PROVIDERS: Provider[] = [
   {
@@ -166,7 +168,7 @@ export const useStore = create<StoreState>()(
       setPrompt: (prompt) => set({ prompt }),
       setAutoStopMinutes: (autoStopMinutes) => set({ autoStopMinutes }),
       setRecordingGain: (recordingGain) =>
-        set({ recordingGain: Math.max(0.5, Math.min(3, recordingGain)) }),
+        set({ recordingGain: Math.max(0.5, Math.min(5, recordingGain)) }),
       setRootFolderName: (rootFolderName) => set({ rootFolderName }),
 
       setRecordingStatus: (recordingStatus) => set({ recordingStatus }),
@@ -204,7 +206,7 @@ export const useStore = create<StoreState>()(
     }),
     {
       name: 'voicenote-v1',
-      version: 2,
+      version: 4,
       partialize: (s) => ({
         providers: s.providers,
         activeProvider: s.activeProvider,
@@ -221,7 +223,7 @@ export const useStore = create<StoreState>()(
         return {
           providers: state.providers ?? DEFAULT_PROVIDERS,
           activeProvider: state.activeProvider ?? 'gemini',
-          prompt: prompt.includes('Evita poner cada frase en una linea separada')
+          prompt: prompt.includes('texto natural y correcto')
             ? prompt
             : `${prompt} ${FORMATTING_PROMPT}`,
           autoStopMinutes: state.autoStopMinutes ?? 90,

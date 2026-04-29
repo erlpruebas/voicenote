@@ -146,7 +146,7 @@ class AudioRecorder {
   }
 
   setGain(gain: number) {
-    this.inputGain = Math.max(0.25, Math.min(4, gain));
+    this.inputGain = Math.max(0.25, Math.min(5, gain));
   }
 
   private applyGain(pcm: Float32Array): Float32Array {

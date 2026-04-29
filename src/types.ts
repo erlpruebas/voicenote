@@ -22,6 +22,7 @@ export interface Recording {
   duration: number;
   fileSize: number;
   transcribed: boolean;
+  transcriptionCostUsd?: number;
   transcriptionError?: string;
 }
 
