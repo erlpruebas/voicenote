@@ -3,13 +3,18 @@ import { persist } from 'zustand/middleware';
 import { Provider, Recording, Tab, RecordingStatus } from '../types';
 
 const DEFAULT_PROMPT =
-  'Transcribe literalmente todo el contenido de este audio sin resumir ni interpretar. ' +
-  'Manten nombres propios y cualquier detalle relevante. ' +
-  'No anadas puntuacion que no este claramente indicada por el tono o pausas del hablante. ' +
-  'Divide el texto en parrafos cuando lo veas necesario para mejorar la lectura.';
+  'Transcribe literalmente todo el contenido del audio en espanol, sin resumir ni interpretar. ' +
+  'Devuelve unicamente la transcripcion, sin introducciones, sin comentarios y sin formato Markdown. ' +
+  'Anade puntuacion natural para que el texto se lea como un texto normal: puntos, comas, signos de interrogacion y signos de exclamacion cuando correspondan por el sentido, las pausas y la entonacion. ' +
+  'Agrupa las frases en parrafos naturales. Crea un nuevo parrafo cuando cambie la idea, el tema, el hablante, el momento del discurso o cuando haya una pausa clara. ' +
+  'Evita poner cada frase en una linea separada. ' +
+  'Manten nombres propios, terminos especificos y detalles relevantes lo mas fielmente posible. ' +
+  'No inventes contenido que no este en el audio.';
 
-const PARAGRAPH_PROMPT =
-  'Divide el texto en parrafos cuando lo veas necesario para mejorar la lectura.';
+const FORMATTING_PROMPT =
+  'Anade puntuacion natural para que el texto se lea como un texto normal: puntos, comas, signos de interrogacion y signos de exclamacion cuando correspondan por el sentido, las pausas y la entonacion. ' +
+  'Agrupa las frases en parrafos naturales. Crea un nuevo parrafo cuando cambie la idea, el tema, el hablante, el momento del discurso o cuando haya una pausa clara. ' +
+  'Evita poner cada frase en una linea separada.';
 
 const DEFAULT_PROVIDERS: Provider[] = [
   {
@@ -216,9 +221,9 @@ export const useStore = create<StoreState>()(
         return {
           providers: state.providers ?? DEFAULT_PROVIDERS,
           activeProvider: state.activeProvider ?? 'gemini',
-          prompt: prompt.includes('parrafos') || prompt.includes('párrafos')
+          prompt: prompt.includes('Evita poner cada frase en una linea separada')
             ? prompt
-            : `${prompt} ${PARAGRAPH_PROMPT}`,
+            : `${prompt} ${FORMATTING_PROMPT}`,
           autoStopMinutes: state.autoStopMinutes ?? 90,
           recordingGain: state.recordingGain ?? 1,
           autoStopEnabled: state.autoStopEnabled ?? false,
