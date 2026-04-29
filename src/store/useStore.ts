@@ -4,8 +4,12 @@ import { Provider, Recording, Tab, RecordingStatus } from '../types';
 
 const DEFAULT_PROMPT =
   'Transcribe literalmente todo el contenido de este audio sin resumir ni interpretar. ' +
-  'Mantén nombres propios y cualquier detalle relevante. ' +
-  'No añadas puntuación que no esté claramente indicada por el tono o pausas del hablante.';
+  'Manten nombres propios y cualquier detalle relevante. ' +
+  'No anadas puntuacion que no este claramente indicada por el tono o pausas del hablante. ' +
+  'Divide el texto en parrafos cuando lo veas necesario para mejorar la lectura.';
+
+const PARAGRAPH_PROMPT =
+  'Divide el texto en parrafos cuando lo veas necesario para mejorar la lectura.';
 
 const DEFAULT_PROVIDERS: Provider[] = [
   {
@@ -14,7 +18,7 @@ const DEFAULT_PROVIDERS: Provider[] = [
     apiKey: '',
     enabled: true,
     models: [
-      { id: 'whisper-large-v3-turbo', name: 'Whisper Large v3 Turbo (rápido)' },
+      { id: 'whisper-large-v3-turbo', name: 'Whisper Large v3 Turbo (rapido)' },
       { id: 'whisper-large-v3', name: 'Whisper Large v3 (preciso)' },
     ],
     selectedModel: 'whisper-large-v3-turbo',
@@ -25,7 +29,7 @@ const DEFAULT_PROVIDERS: Provider[] = [
     apiKey: '',
     enabled: true,
     models: [
-      { id: 'scribe_v1', name: 'Scribe v1 (mejor precisión)' },
+      { id: 'scribe_v1', name: 'Scribe v1 (mejor precision)' },
     ],
     selectedModel: 'scribe_v1',
   },
@@ -36,9 +40,9 @@ const DEFAULT_PROVIDERS: Provider[] = [
     enabled: true,
     models: [
       { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash (recomendado)' },
-      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro (máxima calidad)' },
+      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro (maxima calidad)' },
       { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' },
-      { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash Lite (rápido)' },
+      { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash Lite (rapido)' },
     ],
     selectedModel: 'gemini-2.5-flash',
   },
@@ -60,7 +64,7 @@ const DEFAULT_PROVIDERS: Provider[] = [
     apiKey: '',
     enabled: true,
     models: [
-      { id: 'nova-3', name: 'Nova-3 (alta precisión)' },
+      { id: 'nova-3', name: 'Nova-3 (alta precision)' },
       { id: 'nova-2', name: 'Nova-2' },
     ],
     selectedModel: 'nova-3',
@@ -72,7 +76,7 @@ const DEFAULT_PROVIDERS: Provider[] = [
     enabled: true,
     models: [
       { id: 'best', name: 'Universal-2 (mejor)' },
-      { id: 'nano', name: 'Nano (rápido)' },
+      { id: 'nano', name: 'Nano (rapido)' },
     ],
     selectedModel: 'best',
   },
@@ -86,6 +90,7 @@ interface StoreState {
   activeProvider: string;
   prompt: string;
   autoStopMinutes: number;
+  recordingGain: number;
   rootFolderName: string | null;
 
   recordingStatus: RecordingStatus;
@@ -104,6 +109,7 @@ interface StoreState {
   setActiveProvider: (id: string) => void;
   setPrompt: (p: string) => void;
   setAutoStopMinutes: (m: number) => void;
+  setRecordingGain: (g: number) => void;
   setRootFolderName: (name: string | null) => void;
 
   setRecordingStatus: (s: RecordingStatus) => void;
@@ -131,6 +137,7 @@ export const useStore = create<StoreState>()(
       activeProvider: 'gemini',
       prompt: DEFAULT_PROMPT,
       autoStopMinutes: 90,
+      recordingGain: 1,
       rootFolderName: null,
 
       recordingStatus: 'idle',
@@ -153,6 +160,8 @@ export const useStore = create<StoreState>()(
       setActiveProvider: (id) => set({ activeProvider: id }),
       setPrompt: (prompt) => set({ prompt }),
       setAutoStopMinutes: (autoStopMinutes) => set({ autoStopMinutes }),
+      setRecordingGain: (recordingGain) =>
+        set({ recordingGain: Math.max(0.5, Math.min(3, recordingGain)) }),
       setRootFolderName: (rootFolderName) => set({ rootFolderName }),
 
       setRecordingStatus: (recordingStatus) => set({ recordingStatus }),
@@ -190,15 +199,33 @@ export const useStore = create<StoreState>()(
     }),
     {
       name: 'voicenote-v1',
+      version: 2,
       partialize: (s) => ({
         providers: s.providers,
         activeProvider: s.activeProvider,
         prompt: s.prompt,
         autoStopMinutes: s.autoStopMinutes,
+        recordingGain: s.recordingGain,
         autoStopEnabled: s.autoStopEnabled,
         rootFolderName: s.rootFolderName,
         recordings: s.recordings,
       }),
+      migrate: (persisted) => {
+        const state = persisted as Partial<StoreState>;
+        const prompt = state.prompt ?? DEFAULT_PROMPT;
+        return {
+          providers: state.providers ?? DEFAULT_PROVIDERS,
+          activeProvider: state.activeProvider ?? 'gemini',
+          prompt: prompt.includes('parrafos') || prompt.includes('párrafos')
+            ? prompt
+            : `${prompt} ${PARAGRAPH_PROMPT}`,
+          autoStopMinutes: state.autoStopMinutes ?? 90,
+          recordingGain: state.recordingGain ?? 1,
+          autoStopEnabled: state.autoStopEnabled ?? false,
+          rootFolderName: state.rootFolderName ?? null,
+          recordings: state.recordings ?? [],
+        };
+      },
     }
   )
 );

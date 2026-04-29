@@ -36,6 +36,7 @@ class AudioRecorder {
   private onDuration: DurationCallback | null = null;
   private onLevel: LevelCallback | null = null;
   private lastLevelAt = 0;
+  private inputGain = 1;
 
   async start(onDuration: DurationCallback, onLevel?: LevelCallback): Promise<void> {
     this.onDuration = onDuration;
@@ -64,7 +65,7 @@ class AudioRecorder {
 
     this.processor.onaudioprocess = (e) => {
       if (this._paused) return;
-      const pcm = e.inputBuffer.getChannelData(0);
+      const pcm = this.applyGain(e.inputBuffer.getChannelData(0));
       this.emitLevel(pcm);
       const int16 = this.toInt16(pcm);
       const chunk = this.encoder!.encodeBuffer(int16);
@@ -142,6 +143,19 @@ class AudioRecorder {
 
   get paused() {
     return this._paused;
+  }
+
+  setGain(gain: number) {
+    this.inputGain = Math.max(0.25, Math.min(4, gain));
+  }
+
+  private applyGain(pcm: Float32Array): Float32Array {
+    if (this.inputGain === 1) return pcm;
+    const out = new Float32Array(pcm.length);
+    for (let i = 0; i < pcm.length; i++) {
+      out[i] = Math.max(-1, Math.min(1, pcm[i] * this.inputGain));
+    }
+    return out;
   }
 
   private toInt16(f32: Float32Array): Int16Array {

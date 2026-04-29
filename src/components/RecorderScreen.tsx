@@ -22,6 +22,7 @@ export function RecorderScreen() {
     elapsedSeconds, setElapsedSeconds,
     autoStopEnabled, setAutoStopEnabled,
     autoStopMinutes, setAutoStopMinutes,
+    recordingGain, setRecordingGain,
     activeProvider, providers,
     addRecording, updateRecording, rootFolderName,
   } = useStore();
@@ -46,6 +47,10 @@ export function RecorderScreen() {
   const timerLabel = formatDuration(remainingSec);
 
   useEffect(() => {
+    audioRecorder.setGain(recordingGain);
+  }, [recordingGain]);
+
+  useEffect(() => {
     if (
       isRecording &&
       autoStopEnabled &&
@@ -65,6 +70,7 @@ export function RecorderScreen() {
       setStatusMsg('');
       setInputLevel(0);
       stoppingRef.current = false;
+      audioRecorder.setGain(recordingGain);
 
       await audioRecorder.start(
         (s) => setElapsedSeconds(s),
@@ -197,6 +203,11 @@ export function RecorderScreen() {
     } catch {
       // User cancelled.
     }
+  }
+
+  function handleGainChange(value: number) {
+    audioRecorder.setGain(value);
+    setRecordingGain(value);
   }
 
   return (
@@ -369,6 +380,33 @@ export function RecorderScreen() {
             disabled={!autoStopEnabled || isRecording || isPaused || isProcessing}
           />
           <span className="text-sm text-gray-500 dark:text-gray-400">min</span>
+        </div>
+      </div>
+
+      <div className="card flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-3">
+          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            Ganancia de entrada
+          </label>
+          <span className="text-xs font-mono text-gray-500 dark:text-gray-400">
+            {recordingGain.toFixed(1)}x
+          </span>
+        </div>
+        <input
+          type="range"
+          min={0.5}
+          max={3}
+          step={0.1}
+          value={recordingGain}
+          onInput={(e) => handleGainChange(Number(e.currentTarget.value))}
+          onChange={(e) => handleGainChange(Number(e.currentTarget.value))}
+          disabled={isProcessing}
+          className="progress-slider"
+        />
+        <div className="flex justify-between text-[11px] text-gray-400">
+          <span>0.5x</span>
+          <span>1x</span>
+          <span>3x</span>
         </div>
       </div>
     </div>
