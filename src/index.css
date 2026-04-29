@@ -1,0 +1,180 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base ──────────────────────────────────────────────────────────────── */
+@layer base {
+  * { -webkit-tap-highlight-color: transparent; }
+  html { height: 100%; }
+  body {
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior: none;
+  }
+  #root { height: 100%; }
+}
+
+/* ── Components ────────────────────────────────────────────────────────── */
+@layer components {
+
+  /* Layout */
+  .screen {
+    @apply min-h-full flex flex-col py-4;
+  }
+
+  /* Cards */
+  .card {
+    @apply bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm border border-gray-100 dark:border-gray-700/50;
+  }
+
+  /* Form fields */
+  .field {
+    @apply w-full rounded-xl border border-gray-200 dark:border-gray-700
+           bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white
+           px-3 py-2.5 text-sm outline-none
+           focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-colors;
+  }
+
+  .field-label {
+    @apply text-xs font-medium text-gray-500 dark:text-gray-400 mb-1 block uppercase tracking-wide;
+  }
+
+  /* Section titles */
+  .section-title {
+    @apply text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500;
+  }
+
+  /* Badge */
+  .badge {
+    @apply text-xs bg-brand-100 dark:bg-brand-900/40 text-brand-600 dark:text-brand-400
+           rounded-full px-2 py-0.5 font-medium;
+  }
+
+  /* Timer */
+  .timer-display {
+    @apply text-6xl font-mono font-bold tabular-nums tracking-tight transition-colors;
+  }
+
+  /* Recording button */
+  .rec-btn {
+    @apply w-20 h-20 rounded-full bg-red-500 hover:bg-red-600 active:scale-95
+           flex items-center justify-center text-white shadow-lg shadow-red-500/30
+           transition-all duration-150;
+  }
+
+  .stop-btn {
+    @apply w-20 h-20 rounded-full bg-gray-700 hover:bg-gray-800 active:scale-95
+           flex items-center justify-center text-white shadow-lg
+           transition-all duration-150;
+  }
+
+  .secondary-btn {
+    @apply w-14 h-14 rounded-full bg-gray-100 dark:bg-gray-800
+           hover:bg-gray-200 dark:hover:bg-gray-700 active:scale-95
+           flex items-center justify-center text-gray-700 dark:text-gray-300
+           shadow transition-all duration-150;
+  }
+
+  .play-btn {
+    @apply w-16 h-16 rounded-full bg-brand-500 hover:bg-brand-600 active:scale-95
+           flex items-center justify-center text-white shadow-lg shadow-brand-500/30
+           transition-all duration-150;
+  }
+
+  /* Icon buttons */
+  .icon-btn {
+    @apply w-10 h-10 rounded-xl flex items-center justify-center
+           text-gray-500 dark:text-gray-400
+           hover:bg-gray-100 dark:hover:bg-gray-800 active:scale-95
+           transition-all duration-150;
+  }
+
+  .icon-btn-lg {
+    @apply w-12 h-12 rounded-xl flex items-center justify-center
+           text-gray-500 dark:text-gray-400
+           hover:bg-gray-100 dark:hover:bg-gray-800 active:scale-95
+           transition-all duration-150;
+  }
+
+  /* Action buttons */
+  .btn-primary {
+    @apply bg-brand-500 hover:bg-brand-600 active:scale-95 text-white
+           rounded-xl px-4 py-2.5 text-sm font-semibold
+           transition-all duration-150 shadow-sm;
+  }
+
+  .btn-secondary {
+    @apply bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700
+           active:scale-95 text-gray-700 dark:text-gray-300
+           rounded-xl px-4 py-2.5 text-sm font-medium
+           transition-all duration-150;
+  }
+
+  .btn-danger {
+    @apply bg-red-500 hover:bg-red-600 active:scale-95 text-white
+           rounded-xl px-4 py-2.5 text-sm font-semibold
+           transition-all duration-150;
+  }
+
+  /* Toggle */
+  .toggle {
+    @apply relative w-11 h-6 rounded-full cursor-pointer transition-colors duration-200 shrink-0;
+  }
+  .toggle-on  { @apply bg-brand-500; }
+  .toggle-off { @apply bg-gray-300 dark:bg-gray-600; }
+
+  .toggle-thumb {
+    @apply absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow
+           transition-transform duration-200;
+  }
+  .toggle-on  .toggle-thumb { @apply translate-x-5; }
+  .toggle-off .toggle-thumb { @apply translate-x-0; }
+
+  /* Bottom nav */
+  .bottom-nav {
+    @apply flex border-t border-gray-200 dark:border-gray-800
+           bg-white dark:bg-gray-900 pb-safe;
+  }
+
+  .nav-btn {
+    @apply flex-1 flex flex-col items-center justify-center gap-0.5 py-3
+           transition-colors duration-150;
+  }
+
+  .nav-btn-active {
+    @apply text-brand-600 dark:text-brand-400;
+  }
+
+  .nav-btn-idle {
+    @apply text-gray-400 hover:text-gray-600 dark:hover:text-gray-300;
+  }
+
+  /* Progress slider */
+  .progress-slider {
+    @apply w-full h-1.5 rounded-full appearance-none cursor-pointer
+           bg-gray-200 dark:bg-gray-700 accent-brand-500;
+  }
+
+  /* Wave bars */
+  .wave-bar {
+    @apply w-1 bg-red-500 rounded-full animate-wave;
+    height: 8px;
+  }
+}
+
+/* ── Animations ────────────────────────────────────────────────────────── */
+@keyframes wave {
+  0%, 100% { height: 6px; }
+  50%       { height: 24px; }
+}
+
+.animate-wave {
+  animation: wave 1s ease-in-out infinite;
+}
+
+/* Safe area for iOS home indicator */
+.pb-safe  { padding-bottom: env(safe-area-inset-bottom, 0px); }
+.pt-safe  { padding-top:    env(safe-area-inset-top,    0px); }

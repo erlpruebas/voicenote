@@ -1,0 +1,13 @@
+{
+  "name": "VoiceNote",
+  "short_name": "VoiceNote",
+  "description": "Grabadora de voz con transcripción por IA",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f9fafb",
+  "theme_color": "#6366f1",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
