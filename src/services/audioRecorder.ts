@@ -1,11 +1,21 @@
-// @ts-ignore
-import lamejs from 'lamejs';
-
 // Voice-optimised settings: 16 kHz mono 32 kbps ≈ 13.7 MB/hr
 // (stays under Gemini's 20 MB inline limit for recordings up to ~85 min)
 const SAMPLE_RATE = 16000;
 const BIT_RATE = 32;
 const BUFFER_SIZE = 4096;
+
+type Mp3Encoder = {
+  encodeBuffer(left: Int16Array, right?: Int16Array): Int8Array;
+  flush(): Int8Array;
+};
+
+declare global {
+  interface Window {
+    lamejs?: {
+      Mp3Encoder: new (channels: number, sampleRate: number, kbps: number) => Mp3Encoder;
+    };
+  }
+}
 
 type DurationCallback = (seconds: number) => void;
 
@@ -14,7 +24,7 @@ class AudioRecorder {
   private stream: MediaStream | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private processor: ScriptProcessorNode | null = null;
-  private encoder: InstanceType<typeof lamejs.Mp3Encoder> | null = null;
+  private encoder: Mp3Encoder | null = null;
   private mp3Chunks: Int8Array[] = [];
   private startTime = 0;
   private pausedAt = 0;
@@ -26,6 +36,8 @@ class AudioRecorder {
 
   async start(onDuration: DurationCallback): Promise<void> {
     this.onDuration = onDuration;
+    const Mp3Encoder = window.lamejs?.Mp3Encoder;
+    if (!Mp3Encoder) throw new Error('No se pudo cargar el codificador MP3');
 
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -37,7 +49,7 @@ class AudioRecorder {
     });
 
     this.audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-    this.encoder = new lamejs.Mp3Encoder(1, this.audioContext.sampleRate, BIT_RATE);
+    this.encoder = new Mp3Encoder(1, this.audioContext.sampleRate, BIT_RATE);
     this.mp3Chunks = [];
     this.startTime = Date.now();
     this.totalPausedMs = 0;
