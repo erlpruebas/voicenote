@@ -17,6 +17,24 @@ import { estimateGeminiTranscriptionCostUsd, formatUsd } from '../services/cost'
 import { Recording } from '../types';
 
 const LARGE_AUDIO_WARNING_MB = 20;
+const GAIN_MIN = 0.1;
+const GAIN_MAX = 10;
+
+function gainToSlider(gain: number): number {
+  const min = Math.log10(GAIN_MIN);
+  const max = Math.log10(GAIN_MAX);
+  return ((Math.log10(Math.max(GAIN_MIN, Math.min(GAIN_MAX, gain))) - min) / (max - min)) * 100;
+}
+
+function sliderToGain(value: number): number {
+  const min = Math.log10(GAIN_MIN);
+  const max = Math.log10(GAIN_MAX);
+  return Number((10 ** (min + (value / 100) * (max - min))).toFixed(2));
+}
+
+function gainMarkerPosition(gain: number): string {
+  return `${gainToSlider(gain)}%`;
+}
 
 export function RecorderScreen() {
   const {
@@ -29,6 +47,7 @@ export function RecorderScreen() {
     recordingGain, setRecordingGain,
     activeProvider, providers, prompt,
     addRecording, updateRecording, rootFolderName,
+    projectNames, recordings,
   } = useStore();
 
   const [statusMsg, setStatusMsg] = useState('');
@@ -49,6 +68,12 @@ export function RecorderScreen() {
     ? Math.max(0, autoStopMinutes * 60 - elapsedSeconds)
     : elapsedSeconds;
   const timerLabel = formatDuration(remainingSec);
+  const projectOptions = Array.from(new Set([
+    'General',
+    currentProject,
+    ...projectNames,
+    ...recordings.map((r) => r.project).filter(Boolean),
+  ].filter(Boolean)));
 
   useEffect(() => {
     audioRecorder.setGain(recordingGain);
@@ -249,12 +274,18 @@ export function RecorderScreen() {
           <label className="field-label">Proyecto / Carpeta</label>
           <div className="flex gap-2">
             <input
+              list="project-options"
               className="field flex-1"
               placeholder="General"
               value={currentProject}
               onChange={(e) => setCurrentProject(e.target.value)}
               disabled={isRecording || isPaused || isProcessing}
             />
+            <datalist id="project-options">
+              {projectOptions.map((project) => (
+                <option key={project} value={project} />
+              ))}
+            </datalist>
             {isFileSystemSupported() && (
               <button
                 className="icon-btn"
@@ -380,19 +411,25 @@ export function RecorderScreen() {
         </div>
         <input
           type="range"
-          min={0.5}
-          max={5}
-          step={0.1}
-          value={recordingGain}
-          onInput={(e) => handleGainChange(Number(e.currentTarget.value))}
-          onChange={(e) => handleGainChange(Number(e.currentTarget.value))}
+          min={0}
+          max={100}
+          step={1}
+          value={gainToSlider(recordingGain)}
+          onInput={(e) => handleGainChange(sliderToGain(Number(e.currentTarget.value)))}
+          onChange={(e) => handleGainChange(sliderToGain(Number(e.currentTarget.value)))}
           disabled={isProcessing}
           className="progress-slider"
         />
-        <div className="flex justify-between text-[11px] text-gray-400">
-          <span>0.5x</span>
-          <span>1x</span>
-          <span>5x</span>
+        <div className="relative h-4 text-[11px] text-gray-400">
+          {[0.1, 1, 5, 10].map((gain) => (
+            <span
+              key={gain}
+              className="absolute -translate-x-1/2"
+              style={{ left: gainMarkerPosition(gain) }}
+            >
+              {gain}x
+            </span>
+          ))}
         </div>
       </div>
 

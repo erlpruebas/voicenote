@@ -98,6 +98,7 @@ interface StoreState {
   prompt: string;
   autoStopMinutes: number;
   recordingGain: number;
+  projectNames: string[];
   rootFolderName: string | null;
 
   recordingStatus: RecordingStatus;
@@ -145,6 +146,7 @@ export const useStore = create<StoreState>()(
       prompt: DEFAULT_PROMPT,
       autoStopMinutes: 90,
       recordingGain: 1,
+      projectNames: ['General'],
       rootFolderName: null,
 
       recordingStatus: 'idle',
@@ -168,7 +170,7 @@ export const useStore = create<StoreState>()(
       setPrompt: (prompt) => set({ prompt }),
       setAutoStopMinutes: (autoStopMinutes) => set({ autoStopMinutes }),
       setRecordingGain: (recordingGain) =>
-        set({ recordingGain: Math.max(0.5, Math.min(5, recordingGain)) }),
+        set({ recordingGain: Math.max(0.1, Math.min(10, recordingGain)) }),
       setRootFolderName: (rootFolderName) => set({ rootFolderName }),
 
       setRecordingStatus: (recordingStatus) => set({ recordingStatus }),
@@ -177,7 +179,11 @@ export const useStore = create<StoreState>()(
       setElapsedSeconds: (elapsedSeconds) => set({ elapsedSeconds }),
       setAutoStopEnabled: (autoStopEnabled) => set({ autoStopEnabled }),
 
-      addRecording: (r) => set((s) => ({ recordings: [r, ...s.recordings] })),
+      addRecording: (r) =>
+        set((s) => ({
+          recordings: [r, ...s.recordings],
+          projectNames: Array.from(new Set([...s.projectNames, r.project || 'General'])),
+        })),
       updateRecording: (id, updates) =>
         set((s) => ({
           recordings: s.recordings.map((r) => (r.id === id ? { ...r, ...updates } : r)),
@@ -206,13 +212,15 @@ export const useStore = create<StoreState>()(
     }),
     {
       name: 'voicenote-v1',
-      version: 4,
+      version: 5,
       partialize: (s) => ({
         providers: s.providers,
         activeProvider: s.activeProvider,
         prompt: s.prompt,
         autoStopMinutes: s.autoStopMinutes,
         recordingGain: s.recordingGain,
+        projectNames: s.projectNames,
+        currentProject: s.currentProject,
         autoStopEnabled: s.autoStopEnabled,
         rootFolderName: s.rootFolderName,
         recordings: s.recordings,
@@ -228,6 +236,8 @@ export const useStore = create<StoreState>()(
             : `${prompt} ${FORMATTING_PROMPT}`,
           autoStopMinutes: state.autoStopMinutes ?? 90,
           recordingGain: state.recordingGain ?? 1,
+          projectNames: state.projectNames ?? ['General'],
+          currentProject: state.currentProject ?? '',
           autoStopEnabled: state.autoStopEnabled ?? false,
           rootFolderName: state.rootFolderName ?? null,
           recordings: state.recordings ?? [],

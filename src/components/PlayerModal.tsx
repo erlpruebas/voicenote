@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   X, Play, Pause, SkipBack, SkipForward, RefreshCw, ChevronLeft, ChevronRight,
-  FileText, Volume2, Loader2,
+  Copy, FileText, Send, Volume2, Loader2,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import {
@@ -30,6 +30,7 @@ export function PlayerModal() {
   const [loadingTranscript, setLoadingTranscript] = useState(false);
   const [retranscribing, setRetranscribing] = useState(false);
   const [error, setError] = useState('');
+  const [shareMsg, setShareMsg] = useState('');
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const blobUrlRef = useRef<string>('');
@@ -48,6 +49,7 @@ export function PlayerModal() {
     setCurrentTime(0);
     setTranscript(null);
     setError('');
+    setShareMsg('');
 
     const audioName = rec.audioName ?? `${rec.name}.mp3`;
     loadAudio(rec.project, audioName).then((blob) => blob ?? loadCachedAudio(rec.id)).then((blob) => {
@@ -145,6 +147,41 @@ export function PlayerModal() {
       setError((err as Error).message);
     } finally {
       setRetranscribing(false);
+    }
+  }
+
+  async function handleCopyTranscript() {
+    if (!transcript) return;
+    try {
+      await navigator.clipboard.writeText(transcript);
+      setShareMsg('Transcripcion copiada.');
+      window.setTimeout(() => setShareMsg(''), 3000);
+    } catch (err) {
+      setShareMsg(`No se pudo copiar: ${(err as Error).message}`);
+    }
+  }
+
+  async function handleShareTranscript() {
+    if (!transcript) return;
+    const r = rec;
+    if (!r) return;
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: r.name,
+          text: transcript,
+        });
+        return;
+      }
+
+      await navigator.clipboard.writeText(transcript);
+      setShareMsg('Tu navegador no permite compartir aqui; transcripcion copiada.');
+      window.setTimeout(() => setShareMsg(''), 4000);
+    } catch (err) {
+      const message = (err as Error).name === 'AbortError'
+        ? ''
+        : `No se pudo compartir: ${(err as Error).message}`;
+      setShareMsg(message);
     }
   }
 
@@ -277,22 +314,49 @@ export function PlayerModal() {
 
         {tab === 'transcript' && (
           <div className="flex flex-col gap-4 p-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3">
               <h3 className="font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-2">
                 <FileText size={16} /> Transcripción
               </h3>
-              <button
-                className="flex items-center gap-1.5 text-sm text-brand-500 font-medium disabled:opacity-50"
-                onClick={handleRetranscribe}
-                disabled={retranscribing}
-              >
-                {retranscribing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                {rec.transcribed ? 'Reintentar' : 'Transcribir'}
-              </button>
+              <div className="flex items-center gap-2">
+                {transcript && (
+                  <>
+                    <button
+                      className="icon-btn"
+                      type="button"
+                      title="Copiar transcripcion"
+                      onClick={handleCopyTranscript}
+                    >
+                      <Copy size={16} />
+                    </button>
+                    <button
+                      className="icon-btn"
+                      type="button"
+                      title="Enviar transcripcion"
+                      onClick={handleShareTranscript}
+                    >
+                      <Send size={16} />
+                    </button>
+                  </>
+                )}
+                <button
+                  className="flex items-center gap-1.5 text-sm text-brand-500 font-medium disabled:opacity-50"
+                  onClick={handleRetranscribe}
+                  disabled={retranscribing}
+                >
+                  {retranscribing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                  {rec.transcribed ? 'Reintentar' : 'Transcribir'}
+                </button>
+              </div>
             </div>
 
             {error && (
               <p className="text-sm text-red-500 bg-red-50 dark:bg-red-900/20 rounded-xl p-3">{error}</p>
+            )}
+            {shareMsg && (
+              <p className="text-sm text-brand-600 bg-brand-50 dark:bg-brand-900/20 rounded-xl p-3">
+                {shareMsg}
+              </p>
             )}
 
             {loadingTranscript ? (
