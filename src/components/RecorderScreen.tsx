@@ -1,40 +1,25 @@
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
-import { FolderOpen, Mic, Pause, Play, Square } from 'lucide-react';
+import { FileText, FolderOpen, Loader2, Mic, Pause, Play, Square } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { audioRecorder } from '../services/audioRecorder';
 import { transcribe } from '../services/transcription';
 import {
   saveAudio,
   saveCachedAudio,
+  saveCachedSegmentAudio,
+  saveCachedSession,
   saveCachedTranscript,
   saveTranscript,
+  saveSessionFile,
   pickProjectDir,
   generateTimestamp,
   formatDuration,
   isFileSystemSupported,
 } from '../services/fileStorage';
 import { estimateGeminiTranscriptionCostUsd, formatUsd } from '../services/cost';
-import { Recording } from '../types';
+import { Recording, TranscriptSegment, VoiceNoteSession } from '../types';
 
 const LARGE_AUDIO_WARNING_MB = 20;
-const GAIN_MIN = 0.1;
-const GAIN_MAX = 10;
-
-function gainToSlider(gain: number): number {
-  const min = Math.log10(GAIN_MIN);
-  const max = Math.log10(GAIN_MAX);
-  return ((Math.log10(Math.max(GAIN_MIN, Math.min(GAIN_MAX, gain))) - min) / (max - min)) * 100;
-}
-
-function sliderToGain(value: number): number {
-  const min = Math.log10(GAIN_MIN);
-  const max = Math.log10(GAIN_MAX);
-  return Number((10 ** (min + (value / 100) * (max - min))).toFixed(2));
-}
-
-function gainMarkerPosition(gain: number): string {
-  return `${gainToSlider(gain)}%`;
-}
 
 export function RecorderScreen() {
   const {
@@ -45,6 +30,7 @@ export function RecorderScreen() {
     autoStopEnabled, setAutoStopEnabled,
     autoStopMinutes, setAutoStopMinutes,
     recordingGain, setRecordingGain,
+    autoGainEnabled,
     activeProvider, providers, prompt,
     addRecording, updateRecording, rootFolderName,
     projectNames, recordings,
@@ -52,8 +38,11 @@ export function RecorderScreen() {
 
   const [statusMsg, setStatusMsg] = useState('');
   const [inputLevel, setInputLevel] = useState(0);
+  const [liveSegments, setLiveSegments] = useState<TranscriptSegment[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const stoppingRef = useRef(false);
+  const activeIdRef = useRef('');
+  const liveSegmentsRef = useRef<TranscriptSegment[]>([]);
 
   useEffect(() => {
     if (!currentName) setCurrentName(generateTimestamp());
@@ -80,6 +69,10 @@ export function RecorderScreen() {
   }, [recordingGain]);
 
   useEffect(() => {
+    liveSegmentsRef.current = liveSegments;
+  }, [liveSegments]);
+
+  useEffect(() => {
     if (
       isRecording &&
       autoStopEnabled &&
@@ -93,18 +86,25 @@ export function RecorderScreen() {
   async function handleStart() {
     try {
       const name = currentName || generateTimestamp();
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      activeIdRef.current = id;
       setCurrentName(name);
       setElapsedSeconds(0);
       setRecordingStatus('recording');
       setStatusMsg('');
       setInputLevel(0);
+      setLiveSegments([]);
       stoppingRef.current = false;
       audioRecorder.setGain(recordingGain);
 
-      await audioRecorder.start(
-        (s) => setElapsedSeconds(s),
-        (level) => setInputLevel((prev) => prev * 0.65 + level * 0.35)
-      );
+      await audioRecorder.start({
+        autoGain: autoGainEnabled,
+        silenceSeconds: 2.5,
+        onDuration: (s) => setElapsedSeconds(s),
+        onLevel: (level) => setInputLevel((prev) => prev * 0.65 + level * 0.35),
+        onGain: (gain) => setRecordingGain(gain),
+        onSegment: (segment) => void handleLiveSegment(id, segment),
+      });
     } catch (err) {
       setRecordingStatus('idle');
       setStatusMsg(`Error al acceder al microfono: ${(err as Error).message}`);
@@ -138,7 +138,7 @@ export function RecorderScreen() {
       return;
     }
 
-    await processAudioBlob(blob, elapsedSeconds, currentName || generateTimestamp(), true);
+    await processAudioBlob(blob, elapsedSeconds, currentName || generateTimestamp(), true, activeIdRef.current);
   }
 
   async function handleFileSelected(e: ChangeEvent<HTMLInputElement>) {
@@ -170,9 +170,59 @@ export function RecorderScreen() {
     await processAudioBlob(file, duration, baseName, false);
   }
 
-  async function processAudioBlob(blob: Blob, duration: number, baseName: string, autoTranscribe: boolean) {
+  async function handleLiveSegment(
+    recordingId: string,
+    segment: { id: string; start: number; end: number; blob: Blob }
+  ) {
+    const item: TranscriptSegment = {
+      id: segment.id,
+      start: segment.start,
+      end: segment.end,
+      rawText: '',
+      editedText: '',
+      highlighted: false,
+      note: '',
+      status: 'pending',
+    };
+
+    setLiveSegments((items) => [...items, item]);
+    await saveCachedSegmentAudio(recordingId, segment.id, segment.blob).catch(() => {});
+
+    const provider = providers.find((p) => p.id === activeProvider);
+    if (!provider?.apiKey) return;
+
+    setLiveSegments((items) => items.map((s) => (
+      s.id === segment.id ? { ...s, status: 'transcribing' } : s
+    )));
+
+    try {
+      const context = liveSegmentsRef.current
+        .slice(-4)
+        .map((s) => s.editedText || s.rawText)
+        .filter(Boolean)
+        .join('\n');
+      const livePrompt = context
+        ? `${prompt}\n\nContexto anterior para mantener continuidad terminologica, sin inventar contenido:\n${context}`
+        : prompt;
+      const text = await transcribe(segment.blob, provider, livePrompt);
+      setLiveSegments((items) => items.map((s) => (
+        s.id === segment.id
+          ? { ...s, rawText: text.trim(), editedText: text.trim(), status: 'done' }
+          : s
+      )));
+    } catch (err) {
+      setLiveSegments((items) => items.map((s) => (
+        s.id === segment.id
+          ? { ...s, status: 'error', error: (err as Error).message }
+          : s
+      )));
+    }
+  }
+
+  async function processAudioBlob(blob: Blob, duration: number, baseName: string, autoTranscribe: boolean, existingId?: string) {
     const project = currentProject || 'General';
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const id = existingId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const segments = liveSegmentsRef.current;
 
     try {
       await saveCachedAudio(id, blob);
@@ -197,23 +247,79 @@ export function RecorderScreen() {
       duration,
       fileSize: blob.size,
       transcribed: false,
+      segmentCount: segments.length,
     };
     addRecording(rec);
     updateRecording(id, { audioName, name: audioName.replace(/\.mp3$/i, '') });
 
-    if (autoTranscribe) {
+    let transcriptText = segments
+      .map((s) => s.editedText || s.rawText)
+      .filter(Boolean)
+      .join('\n\n');
+    const hasLiveTranscript = transcriptText.trim().length > 0;
+
+    if (hasLiveTranscript) {
+      await saveTranscript(transcriptText, project, audioName);
+      await saveCachedTranscript(id, transcriptText);
+      const session: VoiceNoteSession = {
+        version: 1,
+        id,
+        name: audioName.replace(/\.mp3$/i, ''),
+        project,
+        audioFile: audioName,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        duration,
+        segments,
+      };
+      const sessionJson = JSON.stringify(session, null, 2);
+      const sessionName = await saveSessionFile(sessionJson, project, audioName);
+      await saveCachedSession(id, sessionJson);
+      updateRecording(id, {
+        transcribed: true,
+        sessionName,
+        segmentCount: segments.length,
+      });
+      setStatusMsg(`Guardado con ${segments.length} segmentos transcritos.`);
+    } else if (autoTranscribe) {
       const provider = providers.find((p) => p.id === activeProvider);
       if (provider?.apiKey) {
         setStatusMsg('Transcribiendo...');
         try {
           const text = await transcribe(blob, provider, prompt);
+          transcriptText = text;
           await saveTranscript(text, project, audioName);
           await saveCachedTranscript(id, text);
+          const session: VoiceNoteSession = {
+            version: 1,
+            id,
+            name: audioName.replace(/\.mp3$/i, ''),
+            project,
+            audioFile: audioName,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            duration,
+            segments: [{
+              id: 'seg_0001',
+              start: 0,
+              end: duration,
+              rawText: text,
+              editedText: text,
+              highlighted: false,
+              note: '',
+              status: 'done',
+            }],
+          };
+          const sessionJson = JSON.stringify(session, null, 2);
+          const sessionName = await saveSessionFile(sessionJson, project, audioName);
+          await saveCachedSession(id, sessionJson);
           const cost = provider.id === 'gemini'
             ? estimateGeminiTranscriptionCostUsd(duration, text)
             : undefined;
           updateRecording(id, {
             transcribed: true,
+            sessionName,
+            segmentCount: 1,
             transcriptionError: undefined,
             transcriptionCostUsd: cost,
           });
@@ -232,6 +338,8 @@ export function RecorderScreen() {
     setRecordingStatus('idle');
     setCurrentName(generateTimestamp());
     setInputLevel(0);
+    setLiveSegments([]);
+    activeIdRef.current = '';
     stoppingRef.current = false;
     setTimeout(() => setStatusMsg(''), 6000);
   }
@@ -260,11 +368,6 @@ export function RecorderScreen() {
     } catch {
       // User cancelled.
     }
-  }
-
-  function handleGainChange(value: number) {
-    audioRecorder.setGain(value);
-    setRecordingGain(value);
   }
 
   return (
@@ -329,7 +432,7 @@ export function RecorderScreen() {
       </div>
 
       {(isRecording || isPaused) && (
-        <div className="px-2">
+        <div className="px-2 flex flex-col gap-2">
           <div className="h-8 flex items-center gap-3">
             <div className="relative h-4 flex-1 rounded-full overflow-hidden bg-gray-200 dark:bg-gray-800">
               <div className="absolute inset-0 grid grid-cols-[1fr_0.45fr_0.28fr]">
@@ -349,6 +452,10 @@ export function RecorderScreen() {
             <span className="w-9 text-right text-xs font-mono text-gray-400">
               {Math.round(inputLevel * 100)}
             </span>
+          </div>
+          <div className="flex items-center justify-center gap-2 text-xs text-gray-400">
+            <span>Ganancia {recordingGain.toFixed(1)}x</span>
+            {autoGainEnabled && <span className="badge">Auto</span>}
           </div>
         </div>
       )}
@@ -400,38 +507,38 @@ export function RecorderScreen() {
         </div>
       )}
 
-      <div className="card flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-3">
-          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-            Ganancia de entrada
-          </label>
-          <span className="text-xs font-mono text-gray-500 dark:text-gray-400">
-            {recordingGain.toFixed(1)}x
-          </span>
+      {(isRecording || isPaused || liveSegments.length > 0) && (
+        <div className="card flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="section-title flex items-center gap-2">
+              <FileText size={14} /> Transcripcion en vivo
+            </h3>
+            <span className="text-xs text-gray-400">{liveSegments.length} segmentos</span>
+          </div>
+          {liveSegments.length === 0 ? (
+            <p className="text-sm text-gray-400">Habla y hare cortes automaticos cuando haya pausas.</p>
+          ) : (
+            <div className="max-h-64 overflow-y-auto flex flex-col gap-2 pr-1">
+              {liveSegments.map((segment) => (
+                <div key={segment.id} className="rounded-lg bg-gray-50 dark:bg-gray-900 p-3">
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-gray-400 mb-1">
+                    <span>{formatDuration(segment.start)} - {formatDuration(segment.end)}</span>
+                    {segment.status === 'transcribing' && (
+                      <span className="flex items-center gap-1 text-brand-500">
+                        <Loader2 size={11} className="animate-spin" /> transcribiendo
+                      </span>
+                    )}
+                    {segment.status === 'error' && <span className="text-amber-500">error</span>}
+                  </div>
+                  <p className="text-sm leading-relaxed text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
+                    {segment.editedText || segment.rawText || 'Pendiente de transcripcion...'}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={1}
-          value={gainToSlider(recordingGain)}
-          onInput={(e) => handleGainChange(sliderToGain(Number(e.currentTarget.value)))}
-          onChange={(e) => handleGainChange(sliderToGain(Number(e.currentTarget.value)))}
-          disabled={isProcessing}
-          className="progress-slider"
-        />
-        <div className="relative h-4 text-[11px] text-gray-400">
-          {[0.1, 1, 5, 10].map((gain) => (
-            <span
-              key={gain}
-              className="absolute -translate-x-1/2"
-              style={{ left: gainMarkerPosition(gain) }}
-            >
-              {gain}x
-            </span>
-          ))}
-        </div>
-      </div>
+      )}
 
       {!isRecording && !isPaused && (
       <div className="card flex items-center justify-between gap-3">

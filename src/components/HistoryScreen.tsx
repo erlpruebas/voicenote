@@ -83,6 +83,12 @@ export function HistoryScreen() {
                       <span>{formatDuration(rec.duration)}</span>
                       <span>·</span>
                       <span>{formatSize(rec.fileSize)}</span>
+                      {rec.segmentCount !== undefined && rec.segmentCount > 0 && (
+                        <>
+                          <span>Â·</span>
+                          <span>{rec.segmentCount} seg.</span>
+                        </>
+                      )}
                       {rec.transcriptionCostUsd !== undefined && (
                         <>
                           <span>Â·</span>

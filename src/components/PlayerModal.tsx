@@ -1,20 +1,26 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   X, Play, Pause, SkipBack, SkipForward, RefreshCw, ChevronLeft, ChevronRight,
-  Copy, FileText, Send, Volume2, Loader2,
+  Copy, FileText, Send, Volume2, Loader2, Highlighter, Save,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import {
   loadAudio,
   loadCachedAudio,
+  loadCachedSegmentAudio,
+  loadCachedSession,
   loadTranscript,
   loadCachedTranscript,
+  saveCachedSession,
   saveCachedTranscript,
+  saveTranscript,
   formatDuration,
+  loadSessionFile,
+  saveSessionFile,
 } from '../services/fileStorage';
 import { transcribe } from '../services/transcription';
-import { saveTranscript } from '../services/fileStorage';
 import { estimateGeminiTranscriptionCostUsd, formatUsd } from '../services/cost';
+import { TranscriptSegment, VoiceNoteSession } from '../types';
 
 type Tab = 'audio' | 'transcript';
 
@@ -27,8 +33,10 @@ export function PlayerModal() {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [transcript, setTranscript] = useState<string | null>(null);
+  const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [loadingTranscript, setLoadingTranscript] = useState(false);
   const [retranscribing, setRetranscribing] = useState(false);
+  const [savingSegments, setSavingSegments] = useState(false);
   const [error, setError] = useState('');
   const [shareMsg, setShareMsg] = useState('');
 
@@ -48,6 +56,7 @@ export function PlayerModal() {
     setPlaying(false);
     setCurrentTime(0);
     setTranscript(null);
+    setSegments([]);
     setError('');
     setShareMsg('');
 
@@ -70,9 +79,28 @@ export function PlayerModal() {
   useEffect(() => {
     if (tab === 'transcript' && rec && !transcript) {
       setLoadingTranscript(true);
-      loadTranscript(rec.project, rec.audioName ?? `${rec.name}.mp3`)
-        .then((t) => t ?? loadCachedTranscript(rec.id))
-        .then((t) => setTranscript(t ?? ''))
+      const audioName = rec.audioName ?? `${rec.name}.mp3`;
+      Promise.all([
+        loadSessionFile(rec.project, audioName).then((s) => s ?? loadCachedSession(rec.id)),
+        loadTranscript(rec.project, audioName).then((t) => t ?? loadCachedTranscript(rec.id)),
+      ])
+        .then(([sessionJson, text]) => {
+          if (sessionJson) {
+            try {
+              const session = JSON.parse(sessionJson) as VoiceNoteSession;
+              setSegments(session.segments ?? []);
+              const segmentText = (session.segments ?? [])
+                .map((s) => s.editedText || s.rawText)
+                .filter(Boolean)
+                .join('\n\n');
+              setTranscript(segmentText || text || '');
+              return;
+            } catch {
+              // Fall through to plain transcript.
+            }
+          }
+          setTranscript(text ?? '');
+        })
         .finally(() => setLoadingTranscript(false));
     }
   }, [tab, rec?.id]);
@@ -133,10 +161,34 @@ export function PlayerModal() {
       const text = await transcribe(blob, provider, prompt);
       await saveTranscript(text, r.project, audioName);
       await saveCachedTranscript(r.id, text);
+      const session: VoiceNoteSession = {
+        version: 1,
+        id: r.id,
+        name: r.name,
+        project: r.project,
+        audioFile: audioName,
+        createdAt: r.timestamp,
+        updatedAt: Date.now(),
+        duration: r.duration,
+        segments: [{
+          id: 'seg_0001',
+          start: 0,
+          end: r.duration,
+          rawText: text,
+          editedText: text,
+          highlighted: false,
+          note: '',
+          status: 'done',
+        }],
+      };
+      const sessionJson = JSON.stringify(session, null, 2);
+      await saveSessionFile(sessionJson, r.project, audioName);
+      await saveCachedSession(r.id, sessionJson);
       const cost = provider.id === 'gemini'
         ? estimateGeminiTranscriptionCostUsd(r.duration, text)
         : undefined;
       setTranscript(text);
+      setSegments(session.segments);
       updateRecording(r.id, {
         transcribed: true,
         transcriptionError: undefined,
@@ -182,6 +234,87 @@ export function PlayerModal() {
         ? ''
         : `No se pudo compartir: ${(err as Error).message}`;
       setShareMsg(message);
+    }
+  }
+
+  function updateSegment(segmentId: string, updates: Partial<TranscriptSegment>) {
+    setSegments((items) => {
+      const next = items.map((segment) => (
+        segment.id === segmentId ? { ...segment, ...updates, status: updates.editedText !== undefined ? 'edited' : segment.status } : segment
+      ));
+      setTranscript(next.map((s) => s.editedText || s.rawText).filter(Boolean).join('\n\n'));
+      return next;
+    });
+  }
+
+  async function saveSegments(nextSegments = segments) {
+    if (!rec) return;
+    const audioName = rec.audioName ?? `${rec.name}.mp3`;
+    const text = nextSegments.map((s) => s.editedText || s.rawText).filter(Boolean).join('\n\n');
+    const session: VoiceNoteSession = {
+      version: 1,
+      id: rec.id,
+      name: rec.name,
+      project: rec.project,
+      audioFile: audioName,
+      createdAt: rec.timestamp,
+      updatedAt: Date.now(),
+      duration: rec.duration,
+      segments: nextSegments,
+    };
+    setSavingSegments(true);
+    try {
+      await saveTranscript(text, rec.project, audioName);
+      await saveCachedTranscript(rec.id, text);
+      const sessionJson = JSON.stringify(session, null, 2);
+      await saveSessionFile(sessionJson, rec.project, audioName);
+      await saveCachedSession(rec.id, sessionJson);
+      setTranscript(text);
+      setShareMsg('Cambios guardados.');
+      window.setTimeout(() => setShareMsg(''), 3000);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSavingSegments(false);
+    }
+  }
+
+  async function handleRetranscribeSegment(segment: TranscriptSegment) {
+    const provider = providers.find((p) => p.id === activeProvider);
+    if (!provider?.apiKey || !rec) {
+      setError('Configura una API key en Ajustes.');
+      return;
+    }
+
+    setSegments((items) => items.map((s) => (
+      s.id === segment.id ? { ...s, status: 'transcribing', error: undefined } : s
+    )));
+    setError('');
+    try {
+      const blob = await loadCachedSegmentAudio(rec.id, segment.id);
+      if (!blob) throw new Error('No se encontro el audio interno de este segmento.');
+      const context = segments
+        .filter((s) => s.id !== segment.id)
+        .slice(-4)
+        .map((s) => s.editedText || s.rawText)
+        .filter(Boolean)
+        .join('\n');
+      const segmentPrompt = context
+        ? `${prompt}\n\nContexto anterior para mantener continuidad terminologica, sin inventar contenido:\n${context}`
+        : prompt;
+      const text = (await transcribe(blob, provider, segmentPrompt)).trim();
+      const next = segments.map((s) => (
+        s.id === segment.id
+          ? { ...s, rawText: text, editedText: text, status: 'done' as const, error: undefined }
+          : s
+      ));
+      setSegments(next);
+      await saveSegments(next);
+    } catch (err) {
+      setSegments((items) => items.map((s) => (
+        s.id === segment.id ? { ...s, status: 'error', error: (err as Error).message } : s
+      )));
+      setError((err as Error).message);
     }
   }
 
@@ -347,6 +480,17 @@ export function PlayerModal() {
                   {retranscribing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
                   {rec.transcribed ? 'Reintentar' : 'Transcribir'}
                 </button>
+                {segments.length > 0 && (
+                  <button
+                    className="icon-btn"
+                    type="button"
+                    title="Guardar cambios"
+                    onClick={() => void saveSegments()}
+                    disabled={savingSegments}
+                  >
+                    {savingSegments ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                  </button>
+                )}
               </div>
             </div>
 
@@ -362,6 +506,67 @@ export function PlayerModal() {
             {loadingTranscript ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 size={24} className="animate-spin text-brand-400" />
+              </div>
+            ) : segments.length > 0 ? (
+              <div className="flex flex-col gap-3">
+                {segments.map((segment) => (
+                  <div
+                    key={segment.id}
+                    className={`rounded-lg border p-3 flex flex-col gap-2 ${
+                      segment.highlighted
+                        ? 'border-amber-300 bg-amber-50 dark:bg-amber-900/10 dark:border-amber-700'
+                        : 'border-gray-100 bg-gray-50 dark:bg-gray-950 dark:border-gray-800'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2 text-[11px] text-gray-400">
+                      <button
+                        className="hover:text-brand-500"
+                        onClick={() => {
+                          setTab('audio');
+                          window.setTimeout(() => {
+                            if (audioRef.current) {
+                              audioRef.current.currentTime = segment.start;
+                              audioRef.current.play().then(() => setPlaying(true)).catch(() => {});
+                            }
+                          }, 50);
+                        }}
+                      >
+                        {formatDuration(segment.start)} - {formatDuration(segment.end)}
+                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className={`icon-btn ${segment.highlighted ? 'text-amber-500' : ''}`}
+                          title="Marcar segmento"
+                          onClick={() => updateSegment(segment.id, { highlighted: !segment.highlighted })}
+                        >
+                          <Highlighter size={14} />
+                        </button>
+                        <button
+                          className="icon-btn"
+                          title="Retranscribir segmento"
+                          onClick={() => void handleRetranscribeSegment(segment)}
+                          disabled={segment.status === 'transcribing'}
+                        >
+                          {segment.status === 'transcribing'
+                            ? <Loader2 size={14} className="animate-spin" />
+                            : <RefreshCw size={14} />}
+                        </button>
+                      </div>
+                    </div>
+                    <textarea
+                      className="field resize-none min-h-20 text-sm leading-relaxed"
+                      value={segment.editedText || segment.rawText}
+                      onChange={(e) => updateSegment(segment.id, { editedText: e.target.value })}
+                    />
+                    <input
+                      className="field text-xs"
+                      placeholder="Nota interna"
+                      value={segment.note}
+                      onChange={(e) => updateSegment(segment.id, { note: e.target.value })}
+                    />
+                    {segment.error && <p className="text-xs text-amber-500">{segment.error}</p>}
+                  </div>
+                ))}
               </div>
             ) : transcript ? (
               <div className="prose prose-sm dark:prose-invert max-w-none">

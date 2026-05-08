@@ -6,6 +6,27 @@ import {
 import { useStore } from '../store/useStore';
 import { pickKeysFile, pickRootDir, isFileSystemSupported } from '../services/fileStorage';
 import { Provider } from '../types';
+import { audioRecorder } from '../services/audioRecorder';
+import { APP_VERSION } from '../version';
+
+const GAIN_MIN = 0.1;
+const GAIN_MAX = 10;
+
+function gainToSlider(gain: number): number {
+  const min = Math.log10(GAIN_MIN);
+  const max = Math.log10(GAIN_MAX);
+  return ((Math.log10(Math.max(GAIN_MIN, Math.min(GAIN_MAX, gain))) - min) / (max - min)) * 100;
+}
+
+function sliderToGain(value: number): number {
+  const min = Math.log10(GAIN_MIN);
+  const max = Math.log10(GAIN_MAX);
+  return Number((10 ** (min + (value / 100) * (max - min))).toFixed(2));
+}
+
+function gainMarkerPosition(gain: number): string {
+  return `${gainToSlider(gain)}%`;
+}
 
 export function SettingsScreen() {
   const {
@@ -14,6 +35,8 @@ export function SettingsScreen() {
     prompt, setPrompt, resetPrompt,
     rootFolderName, setRootFolderName,
     loadKeys,
+    recordingGain, setRecordingGain,
+    autoGainEnabled, setAutoGainEnabled,
   } = useStore();
 
   const [expanded, setExpanded] = useState<string | null>(activeProvider);
@@ -80,9 +103,67 @@ export function SettingsScreen() {
     setPromptSaved(false);
   }
 
+  function handleGainChange(value: number) {
+    audioRecorder.setGain(value);
+    setRecordingGain(value);
+  }
+
   return (
     <div className="screen flex flex-col gap-6 pb-6">
       <h2 className="text-xl font-bold text-gray-900 dark:text-white pt-2">Ajustes</h2>
+
+      <section className="flex flex-col gap-2">
+        <h3 className="section-title">Microfono</h3>
+        <div className="card flex flex-col gap-4">
+          <label className="flex items-center justify-between gap-3 cursor-pointer">
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Ganancia automatica
+            </span>
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-500"
+              checked={autoGainEnabled}
+              onChange={(e) => setAutoGainEnabled(e.target.checked)}
+            />
+          </label>
+
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Ganancia de entrada
+              </label>
+              <span className="text-xs font-mono text-gray-500 dark:text-gray-400">
+                {recordingGain.toFixed(1)}x
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={gainToSlider(recordingGain)}
+              onInput={(e) => handleGainChange(sliderToGain(Number(e.currentTarget.value)))}
+              onChange={(e) => handleGainChange(sliderToGain(Number(e.currentTarget.value)))}
+              className="progress-slider"
+            />
+            <div className="relative h-4 text-[11px] text-gray-400">
+              {[0.1, 1, 5, 10].map((gain) => (
+                <span
+                  key={gain}
+                  className="absolute -translate-x-1/2"
+                  style={{ left: gainMarkerPosition(gain) }}
+                >
+                  {gain}x
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <p className="text-xs text-gray-400">
+            En automatico se ajusta solo cuando detecta voz y busca picos cercanos al 85%.
+          </p>
+        </div>
+      </section>
 
       {/* ── Carpeta de almacenamiento ─────────────────────────────────────── */}
       <section className="flex flex-col gap-2">
@@ -317,6 +398,10 @@ export function SettingsScreen() {
           </p>
         </div>
       </section>
+
+      <p className="pb-2 text-center text-xs text-gray-400">
+        Version {APP_VERSION}
+      </p>
     </div>
   );
 }

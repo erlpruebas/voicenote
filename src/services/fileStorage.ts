@@ -2,12 +2,14 @@ const DB_NAME = 'voicenote-fs';
 const STORE_NAME = 'handles';
 const AUDIO_STORE_NAME = 'audio-blobs';
 const TRANSCRIPT_STORE_NAME = 'transcripts';
+const SESSION_STORE_NAME = 'sessions';
+const SEGMENT_AUDIO_STORE_NAME = 'segment-audio';
 
 // ── IndexedDB helpers ──────────────────────────────────────────────────────
 
 async function openDB(): Promise<IDBDatabase> {
   return new Promise((res, rej) => {
-    const req = indexedDB.open(DB_NAME, 3);
+    const req = indexedDB.open(DB_NAME, 4);
     req.onupgradeneeded = () => {
       if (!req.result.objectStoreNames.contains(STORE_NAME)) {
         req.result.createObjectStore(STORE_NAME);
@@ -18,8 +20,54 @@ async function openDB(): Promise<IDBDatabase> {
       if (!req.result.objectStoreNames.contains(TRANSCRIPT_STORE_NAME)) {
         req.result.createObjectStore(TRANSCRIPT_STORE_NAME);
       }
+      if (!req.result.objectStoreNames.contains(SESSION_STORE_NAME)) {
+        req.result.createObjectStore(SESSION_STORE_NAME);
+      }
+      if (!req.result.objectStoreNames.contains(SEGMENT_AUDIO_STORE_NAME)) {
+        req.result.createObjectStore(SEGMENT_AUDIO_STORE_NAME);
+      }
     };
     req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error);
+  });
+}
+
+export async function saveCachedSession(id: string, sessionJson: string): Promise<void> {
+  const db = await openDB();
+  return new Promise<void>((res, rej) => {
+    const tx = db.transaction(SESSION_STORE_NAME, 'readwrite');
+    tx.objectStore(SESSION_STORE_NAME).put(sessionJson, id);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+export async function loadCachedSession(id: string): Promise<string | null> {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(SESSION_STORE_NAME, 'readonly');
+    const req = tx.objectStore(SESSION_STORE_NAME).get(id);
+    req.onsuccess = () => res(req.result ?? null);
+    req.onerror = () => rej(req.error);
+  });
+}
+
+export async function saveCachedSegmentAudio(recordingId: string, segmentId: string, blob: Blob): Promise<void> {
+  const db = await openDB();
+  return new Promise<void>((res, rej) => {
+    const tx = db.transaction(SEGMENT_AUDIO_STORE_NAME, 'readwrite');
+    tx.objectStore(SEGMENT_AUDIO_STORE_NAME).put(blob, `${recordingId}:${segmentId}`);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+export async function loadCachedSegmentAudio(recordingId: string, segmentId: string): Promise<Blob | null> {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(SEGMENT_AUDIO_STORE_NAME, 'readonly');
+    const req = tx.objectStore(SEGMENT_AUDIO_STORE_NAME).get(`${recordingId}:${segmentId}`);
+    req.onsuccess = () => res(req.result ?? null);
     req.onerror = () => rej(req.error);
   });
 }
@@ -220,6 +268,33 @@ export async function saveTranscript(
   const dir = await projectDir(root, project);
   await writeFile(dir, txtName, new Blob([text], { type: 'text/plain;charset=utf-8' }));
   return txtName;
+}
+
+export async function saveSessionFile(
+  sessionJson: string,
+  project: string,
+  audioName: string
+): Promise<string> {
+  const sessionName = audioName.replace(/\.mp3$/i, '.voicenote.json');
+  const root = await getRootDir();
+  if (!root) {
+    downloadBlob(new Blob([sessionJson], { type: 'application/json;charset=utf-8' }), sessionName);
+    return sessionName;
+  }
+  const dir = await projectDir(root, project);
+  await writeFile(dir, sessionName, new Blob([sessionJson], { type: 'application/json;charset=utf-8' }));
+  return sessionName;
+}
+
+export async function loadSessionFile(project: string, audioName: string): Promise<string | null> {
+  const root = await getRootDir();
+  if (!root) return null;
+  try {
+    const dir = await root.getDirectoryHandle(project || 'Sin proyecto');
+    const fh = await dir.getFileHandle(audioName.replace(/\.mp3$/i, '.voicenote.json'));
+    const file = await fh.getFile();
+    return await file.text();
+  } catch { return null; }
 }
 
 export async function loadAudio(project: string, name: string): Promise<Blob | null> {

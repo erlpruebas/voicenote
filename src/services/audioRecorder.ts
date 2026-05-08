@@ -19,6 +19,23 @@ declare global {
 
 type DurationCallback = (seconds: number) => void;
 type LevelCallback = (level: number) => void;
+type GainCallback = (gain: number) => void;
+export type RecordedSegment = {
+  id: string;
+  start: number;
+  end: number;
+  blob: Blob;
+};
+type SegmentCallback = (segment: RecordedSegment) => void;
+
+type RecorderOptions = {
+  autoGain?: boolean;
+  silenceSeconds?: number;
+  onDuration: DurationCallback;
+  onLevel?: LevelCallback;
+  onGain?: GainCallback;
+  onSegment?: SegmentCallback;
+};
 
 class AudioRecorder {
   private audioContext: AudioContext | null = null;
@@ -35,12 +52,27 @@ class AudioRecorder {
   private timerInterval: ReturnType<typeof setInterval> | null = null;
   private onDuration: DurationCallback | null = null;
   private onLevel: LevelCallback | null = null;
+  private onGain: GainCallback | null = null;
+  private onSegment: SegmentCallback | null = null;
   private lastLevelAt = 0;
+  private lastGainAt = 0;
   private inputGain = 1;
+  private autoGain = false;
+  private silenceSeconds = 2.5;
+  private segmentEncoder: Mp3Encoder | null = null;
+  private segmentChunks: Int8Array[] = [];
+  private segmentStart = 0;
+  private segmentHasVoice = false;
+  private lastVoiceAt = 0;
+  private segmentIndex = 0;
 
-  async start(onDuration: DurationCallback, onLevel?: LevelCallback): Promise<void> {
-    this.onDuration = onDuration;
-    this.onLevel = onLevel ?? null;
+  async start(options: RecorderOptions): Promise<void> {
+    this.onDuration = options.onDuration;
+    this.onLevel = options.onLevel ?? null;
+    this.onGain = options.onGain ?? null;
+    this.onSegment = options.onSegment ?? null;
+    this.autoGain = options.autoGain ?? false;
+    this.silenceSeconds = options.silenceSeconds ?? 2.5;
     const Mp3Encoder = window.lamejs?.Mp3Encoder;
     if (!Mp3Encoder) throw new Error('No se pudo cargar el codificador MP3');
 
@@ -49,13 +81,19 @@ class AudioRecorder {
         channelCount: 1,
         echoCancellation: false,
         noiseSuppression: false,
-        autoGainControl: true,
+        autoGainControl: false,
       },
     });
 
     this.audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
     this.encoder = new Mp3Encoder(1, this.audioContext.sampleRate, BIT_RATE);
     this.mp3Chunks = [];
+    this.segmentChunks = [];
+    this.segmentEncoder = null;
+    this.segmentHasVoice = false;
+    this.segmentIndex = 0;
+    this.lastVoiceAt = 0;
+    this.segmentStart = 0;
     this.startTime = Date.now();
     this.totalPausedMs = 0;
     this._paused = false;
@@ -65,8 +103,12 @@ class AudioRecorder {
 
     this.processor.onaudioprocess = (e) => {
       if (this._paused) return;
-      const pcm = this.applyGain(e.inputBuffer.getChannelData(0));
-      this.emitLevel(pcm);
+      const raw = e.inputBuffer.getChannelData(0);
+      this.updateAutoGain(raw);
+      const pcm = this.applyGain(raw);
+      const stats = this.measure(pcm);
+      this.emitLevelFromStats(stats.level);
+      this.handleSegment(pcm, stats);
       const int16 = this.toInt16(pcm);
       const chunk = this.encoder!.encodeBuffer(int16);
       if (chunk.length > 0) this.mp3Chunks.push(new Int8Array(chunk));
@@ -76,7 +118,7 @@ class AudioRecorder {
     this.processor.connect(this.audioContext.destination);
 
     this.timerInterval = setInterval(() => {
-      if (!this._paused) onDuration(this.elapsed());
+      if (!this._paused) options.onDuration(this.elapsed());
     }, 500);
 
     // Wake Lock — keep screen on; if denied, recording still continues
@@ -114,6 +156,7 @@ class AudioRecorder {
 
     const tail = this.encoder?.flush();
     if (tail && tail.length > 0) this.mp3Chunks.push(new Int8Array(tail));
+    this.finalizeSegment(this.elapsed());
 
     await this.audioContext?.close();
     this.wakeLock?.release().catch(() => {});
@@ -129,8 +172,13 @@ class AudioRecorder {
     this.processor = null;
     this.encoder = null;
     this.onLevel = null;
+    this.onGain = null;
+    this.onSegment = null;
     this.lastLevelAt = 0;
+    this.lastGainAt = 0;
     this.mp3Chunks = [];
+    this.segmentChunks = [];
+    this.segmentEncoder = null;
 
     return blob;
   }
@@ -158,6 +206,24 @@ class AudioRecorder {
     return out;
   }
 
+  private updateAutoGain(raw: Float32Array) {
+    if (!this.autoGain) return;
+    const stats = this.measure(raw);
+    if (!stats.hasVoice) return;
+
+    const now = performance.now();
+    if (now - this.lastGainAt < 350) return;
+    this.lastGainAt = now;
+
+    const targetPeak = 0.85;
+    const observedPeak = Math.max(0.02, stats.peak * this.inputGain);
+    const desired = this.inputGain * (targetPeak / observedPeak);
+    const limited = Math.max(0.1, Math.min(10, desired));
+    const smoothing = limited < this.inputGain ? 0.45 : 0.18;
+    this.inputGain = Number((this.inputGain + (limited - this.inputGain) * smoothing).toFixed(2));
+    this.onGain?.(this.inputGain);
+  }
+
   private toInt16(f32: Float32Array): Int16Array {
     const out = new Int16Array(f32.length);
     for (let i = 0; i < f32.length; i++) {
@@ -167,12 +233,7 @@ class AudioRecorder {
     return out;
   }
 
-  private emitLevel(pcm: Float32Array) {
-    if (!this.onLevel) return;
-    const now = performance.now();
-    if (now - this.lastLevelAt < 80) return;
-    this.lastLevelAt = now;
-
+  private measure(pcm: Float32Array) {
     let sum = 0;
     let peak = 0;
     for (let i = 0; i < pcm.length; i++) {
@@ -183,7 +244,71 @@ class AudioRecorder {
 
     const rms = Math.sqrt(sum / pcm.length);
     const level = Math.min(1, Math.max(peak, rms * 3.5));
+    return {
+      peak,
+      rms,
+      level,
+      hasVoice: peak > 0.025 || rms > 0.012,
+    };
+  }
+
+  private emitLevelFromStats(level: number) {
+    if (!this.onLevel) return;
+    const now = performance.now();
+    if (now - this.lastLevelAt < 80) return;
+    this.lastLevelAt = now;
     this.onLevel(level);
+  }
+
+  private handleSegment(pcm: Float32Array, stats: ReturnType<AudioRecorder['measure']>) {
+    const now = this.elapsed();
+    const bufferSeconds = pcm.length / (this.audioContext?.sampleRate ?? SAMPLE_RATE);
+
+    if (stats.hasVoice && !this.segmentEncoder) {
+      this.segmentEncoder = new window.lamejs!.Mp3Encoder(1, this.audioContext?.sampleRate ?? SAMPLE_RATE, BIT_RATE);
+      this.segmentChunks = [];
+      this.segmentHasVoice = false;
+      this.segmentStart = Math.max(0, now - bufferSeconds);
+    }
+
+    if (!this.segmentEncoder) return;
+
+    const chunk = this.segmentEncoder.encodeBuffer(this.toInt16(pcm));
+    if (chunk.length > 0) this.segmentChunks.push(new Int8Array(chunk));
+
+    if (stats.hasVoice) {
+      this.segmentHasVoice = true;
+      this.lastVoiceAt = now;
+    }
+
+    if (this.segmentHasVoice && now - this.lastVoiceAt >= this.silenceSeconds) {
+      this.finalizeSegment(Math.max(this.segmentStart, this.lastVoiceAt));
+    }
+  }
+
+  private finalizeSegment(end: number) {
+    if (!this.segmentEncoder || !this.segmentHasVoice) {
+      this.segmentEncoder = null;
+      this.segmentChunks = [];
+      return;
+    }
+
+    const tail = this.segmentEncoder.flush();
+    if (tail.length > 0) this.segmentChunks.push(new Int8Array(tail));
+
+    const blob = new Blob(this.segmentChunks as unknown as BlobPart[], { type: 'audio/mpeg' });
+    if (blob.size > 512) {
+      this.onSegment?.({
+        id: `seg_${String(++this.segmentIndex).padStart(4, '0')}`,
+        start: this.segmentStart,
+        end,
+        blob,
+      });
+    }
+
+    this.segmentEncoder = null;
+    this.segmentChunks = [];
+    this.segmentHasVoice = false;
   }
 
   private setupMediaSession() {

@@ -98,6 +98,7 @@ interface StoreState {
   prompt: string;
   autoStopMinutes: number;
   recordingGain: number;
+  autoGainEnabled: boolean;
   projectNames: string[];
   rootFolderName: string | null;
 
@@ -118,6 +119,7 @@ interface StoreState {
   setPrompt: (p: string) => void;
   setAutoStopMinutes: (m: number) => void;
   setRecordingGain: (g: number) => void;
+  setAutoGainEnabled: (enabled: boolean) => void;
   setRootFolderName: (name: string | null) => void;
 
   setRecordingStatus: (s: RecordingStatus) => void;
@@ -146,6 +148,7 @@ export const useStore = create<StoreState>()(
       prompt: DEFAULT_PROMPT,
       autoStopMinutes: 90,
       recordingGain: 1,
+      autoGainEnabled: true,
       projectNames: ['General'],
       rootFolderName: null,
 
@@ -171,6 +174,7 @@ export const useStore = create<StoreState>()(
       setAutoStopMinutes: (autoStopMinutes) => set({ autoStopMinutes }),
       setRecordingGain: (recordingGain) =>
         set({ recordingGain: Math.max(0.1, Math.min(10, recordingGain)) }),
+      setAutoGainEnabled: (autoGainEnabled) => set({ autoGainEnabled }),
       setRootFolderName: (rootFolderName) => set({ rootFolderName }),
 
       setRecordingStatus: (recordingStatus) => set({ recordingStatus }),
@@ -219,6 +223,7 @@ export const useStore = create<StoreState>()(
         prompt: s.prompt,
         autoStopMinutes: s.autoStopMinutes,
         recordingGain: s.recordingGain,
+        autoGainEnabled: s.autoGainEnabled,
         projectNames: s.projectNames,
         currentProject: s.currentProject,
         autoStopEnabled: s.autoStopEnabled,
@@ -236,6 +241,7 @@ export const useStore = create<StoreState>()(
             : `${prompt} ${FORMATTING_PROMPT}`,
           autoStopMinutes: state.autoStopMinutes ?? 90,
           recordingGain: state.recordingGain ?? 1,
+          autoGainEnabled: state.autoGainEnabled ?? true,
           projectNames: state.projectNames ?? ['General'],
           currentProject: state.currentProject ?? '',
           autoStopEnabled: state.autoStopEnabled ?? false,
