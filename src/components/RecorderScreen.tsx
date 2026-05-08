@@ -41,10 +41,16 @@ export function RecorderScreen() {
   const [liveSegments, setLiveSegments] = useState<TranscriptSegment[]>([]);
   const [liveEditorText, setLiveEditorText] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const stoppingRef = useRef(false);
   const activeIdRef = useRef('');
   const liveSegmentsRef = useRef<TranscriptSegment[]>([]);
   const liveEditorTextRef = useRef('');
+  const savedEditorTextRef = useRef('');
+  const typingQueueRef = useRef('');
+  const typingTimerRef = useRef<number | null>(null);
+  const autoScrollRef = useRef(true);
+  const autoScrollResumeTimerRef = useRef<number | null>(null);
   const liveTasksRef = useRef<Set<Promise<void>>>(new Set());
 
   useEffect(() => {
@@ -80,6 +86,13 @@ export function RecorderScreen() {
   }, [liveEditorText]);
 
   useEffect(() => {
+    return () => {
+      if (typingTimerRef.current) window.clearInterval(typingTimerRef.current);
+      if (autoScrollResumeTimerRef.current) window.clearTimeout(autoScrollResumeTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
     if (
       isRecording &&
       autoStopEnabled &&
@@ -102,14 +115,21 @@ export function RecorderScreen() {
       setInputLevel(0);
       setLiveSegments([]);
       setLiveEditorText('');
+      savedEditorTextRef.current = '';
+      typingQueueRef.current = '';
+      if (typingTimerRef.current) window.clearInterval(typingTimerRef.current);
+      typingTimerRef.current = null;
+      autoScrollRef.current = true;
+      if (autoScrollResumeTimerRef.current) window.clearTimeout(autoScrollResumeTimerRef.current);
+      autoScrollResumeTimerRef.current = null;
       liveTasksRef.current.clear();
       stoppingRef.current = false;
       audioRecorder.setGain(recordingGain);
 
       await audioRecorder.start({
         autoGain: autoGainEnabled,
-        silenceSeconds: 0.75,
-        maxSegmentSeconds: 7,
+        silenceSeconds: 0.45,
+        maxSegmentSeconds: 4.5,
         onDuration: (s) => setElapsedSeconds(s),
         onLevel: (level) => setInputLevel((prev) => prev * 0.65 + level * 0.35),
         onGain: (gain) => setRecordingGain(gain),
@@ -239,11 +259,7 @@ export function RecorderScreen() {
           : s
       )));
       if (cleanText) {
-        setLiveEditorText((current) => (
-          current.trim()
-            ? `${current.trimEnd()}\n\n${cleanText}`
-            : cleanText
-        ));
+        queueLiveText(cleanText);
       }
     } catch (err) {
       setLiveSegments((items) => items.map((s) => (
@@ -252,6 +268,72 @@ export function RecorderScreen() {
           : s
       )));
     }
+  }
+
+  function queueLiveText(text: string) {
+    const separator = savedEditorTextRef.current.trim() ? '\n\n' : '';
+    savedEditorTextRef.current = `${savedEditorTextRef.current.trimEnd()}${separator}${text}`;
+    typingQueueRef.current += `${typingQueueRef.current || liveEditorTextRef.current.trim() ? separator : ''}${text}`;
+    startTypingQueue();
+  }
+
+  function startTypingQueue() {
+    if (typingTimerRef.current) return;
+    typingTimerRef.current = window.setInterval(() => {
+      const next = typingQueueRef.current;
+      if (!next) {
+        if (typingTimerRef.current) window.clearInterval(typingTimerRef.current);
+        typingTimerRef.current = null;
+        return;
+      }
+
+      const chunkSize = next.startsWith('\n') ? 2 : Math.min(8, next.length);
+      const chunk = next.slice(0, chunkSize);
+      typingQueueRef.current = next.slice(chunk.length);
+      setLiveEditorText((current) => {
+        const updated = `${current}${chunk}`;
+        liveEditorTextRef.current = updated;
+        return updated;
+      });
+      scrollEditorToBottom();
+    }, 28);
+  }
+
+  function scrollEditorToBottom() {
+    if (!autoScrollRef.current) return;
+    window.requestAnimationFrame(() => {
+      const editor = editorRef.current;
+      if (editor) editor.scrollTop = editor.scrollHeight;
+    });
+  }
+
+  function handleEditorScroll() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const distanceFromBottom = editor.scrollHeight - editor.scrollTop - editor.clientHeight;
+    if (distanceFromBottom < 64) {
+      autoScrollRef.current = true;
+      if (autoScrollResumeTimerRef.current) window.clearTimeout(autoScrollResumeTimerRef.current);
+      autoScrollResumeTimerRef.current = null;
+      return;
+    }
+    pauseAutoScroll();
+  }
+
+  function pauseAutoScroll(ms = 7000) {
+    autoScrollRef.current = false;
+    if (autoScrollResumeTimerRef.current) window.clearTimeout(autoScrollResumeTimerRef.current);
+    autoScrollResumeTimerRef.current = window.setTimeout(() => {
+      autoScrollRef.current = true;
+      scrollEditorToBottom();
+    }, ms);
+  }
+
+  function handleEditorChange(value: string) {
+    setLiveEditorText(value);
+    liveEditorTextRef.current = value;
+    savedEditorTextRef.current = value;
+    pauseAutoScroll();
   }
 
   async function processAudioBlob(blob: Blob, duration: number, baseName: string, autoTranscribe: boolean, existingId?: string) {
@@ -287,7 +369,8 @@ export function RecorderScreen() {
     addRecording(rec);
     updateRecording(id, { audioName, name: audioName.replace(/\.mp3$/i, '') });
 
-    let transcriptText = liveEditorTextRef.current.trim() || segments
+    const visibleTranscript = (savedEditorTextRef.current || liveEditorTextRef.current).trim();
+    let transcriptText = visibleTranscript || segments
       .map((s) => s.editedText || s.rawText)
       .filter(Boolean)
       .join('\n\n');
@@ -375,6 +458,12 @@ export function RecorderScreen() {
     setInputLevel(0);
     setLiveSegments([]);
     setLiveEditorText('');
+    savedEditorTextRef.current = '';
+    typingQueueRef.current = '';
+    if (typingTimerRef.current) window.clearInterval(typingTimerRef.current);
+    typingTimerRef.current = null;
+    if (autoScrollResumeTimerRef.current) window.clearTimeout(autoScrollResumeTimerRef.current);
+    autoScrollResumeTimerRef.current = null;
     liveTasksRef.current.clear();
     activeIdRef.current = '';
     stoppingRef.current = false;
@@ -515,9 +604,14 @@ export function RecorderScreen() {
       {(isRecording || isPaused) && (
         <div className="relative flex-1 min-h-[46vh] rounded-xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-sm overflow-hidden">
           <textarea
+            ref={editorRef}
             className="h-full min-h-[46vh] w-full resize-none bg-transparent px-4 py-4 text-[17px] leading-7 text-gray-900 dark:text-gray-100 outline-none"
             value={liveEditorText}
-            onChange={(e) => setLiveEditorText(e.target.value)}
+            onChange={(e) => handleEditorChange(e.target.value)}
+            onScroll={handleEditorScroll}
+            onPointerDown={() => pauseAutoScroll()}
+            onKeyDown={() => pauseAutoScroll()}
+            onSelect={() => pauseAutoScroll(9000)}
             placeholder="Empieza a hablar..."
           />
           {!liveEditorText && (
