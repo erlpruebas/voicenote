@@ -1,5 +1,5 @@
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
-import { FileText, FolderOpen, Loader2, Mic, Pause, Play, Square } from 'lucide-react';
+import { FolderOpen, Loader2, Mic, Pause, Play, Square } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { audioRecorder } from '../services/audioRecorder';
 import { transcribe } from '../services/transcription';
@@ -39,10 +39,13 @@ export function RecorderScreen() {
   const [statusMsg, setStatusMsg] = useState('');
   const [inputLevel, setInputLevel] = useState(0);
   const [liveSegments, setLiveSegments] = useState<TranscriptSegment[]>([]);
+  const [liveEditorText, setLiveEditorText] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const stoppingRef = useRef(false);
   const activeIdRef = useRef('');
   const liveSegmentsRef = useRef<TranscriptSegment[]>([]);
+  const liveEditorTextRef = useRef('');
+  const liveTasksRef = useRef<Set<Promise<void>>>(new Set());
 
   useEffect(() => {
     if (!currentName) setCurrentName(generateTimestamp());
@@ -73,6 +76,10 @@ export function RecorderScreen() {
   }, [liveSegments]);
 
   useEffect(() => {
+    liveEditorTextRef.current = liveEditorText;
+  }, [liveEditorText]);
+
+  useEffect(() => {
     if (
       isRecording &&
       autoStopEnabled &&
@@ -94,16 +101,23 @@ export function RecorderScreen() {
       setStatusMsg('');
       setInputLevel(0);
       setLiveSegments([]);
+      setLiveEditorText('');
+      liveTasksRef.current.clear();
       stoppingRef.current = false;
       audioRecorder.setGain(recordingGain);
 
       await audioRecorder.start({
         autoGain: autoGainEnabled,
-        silenceSeconds: 2.5,
+        silenceSeconds: 0.75,
+        maxSegmentSeconds: 7,
         onDuration: (s) => setElapsedSeconds(s),
         onLevel: (level) => setInputLevel((prev) => prev * 0.65 + level * 0.35),
         onGain: (gain) => setRecordingGain(gain),
-        onSegment: (segment) => void handleLiveSegment(id, segment),
+        onSegment: (segment) => {
+          const task = handleLiveSegment(id, segment);
+          liveTasksRef.current.add(task);
+          task.finally(() => liveTasksRef.current.delete(task));
+        },
       });
     } catch (err) {
       setRecordingStatus('idle');
@@ -130,6 +144,10 @@ export function RecorderScreen() {
     let blob: Blob;
     try {
       blob = await audioRecorder.stop();
+      if (liveTasksRef.current.size > 0) {
+        setStatusMsg('Terminando transcripcion en vivo...');
+        await waitForLiveTranscriptionTasks();
+      }
     } catch (err) {
       setRecordingStatus('idle');
       setInputLevel(0);
@@ -139,6 +157,15 @@ export function RecorderScreen() {
     }
 
     await processAudioBlob(blob, elapsedSeconds, currentName || generateTimestamp(), true, activeIdRef.current);
+  }
+
+  async function waitForLiveTranscriptionTasks() {
+    const tasks = Array.from(liveTasksRef.current);
+    if (tasks.length === 0) return;
+    await Promise.race([
+      Promise.allSettled(tasks),
+      new Promise((resolve) => window.setTimeout(resolve, 12000)),
+    ]);
   }
 
   async function handleFileSelected(e: ChangeEvent<HTMLInputElement>) {
@@ -205,11 +232,19 @@ export function RecorderScreen() {
         ? `${prompt}\n\nContexto anterior para mantener continuidad terminologica, sin inventar contenido:\n${context}`
         : prompt;
       const text = await transcribe(segment.blob, provider, livePrompt);
+      const cleanText = text.trim();
       setLiveSegments((items) => items.map((s) => (
         s.id === segment.id
-          ? { ...s, rawText: text.trim(), editedText: text.trim(), status: 'done' }
+          ? { ...s, rawText: cleanText, editedText: cleanText, status: 'done' }
           : s
       )));
+      if (cleanText) {
+        setLiveEditorText((current) => (
+          current.trim()
+            ? `${current.trimEnd()}\n\n${cleanText}`
+            : cleanText
+        ));
+      }
     } catch (err) {
       setLiveSegments((items) => items.map((s) => (
         s.id === segment.id
@@ -252,7 +287,7 @@ export function RecorderScreen() {
     addRecording(rec);
     updateRecording(id, { audioName, name: audioName.replace(/\.mp3$/i, '') });
 
-    let transcriptText = segments
+    let transcriptText = liveEditorTextRef.current.trim() || segments
       .map((s) => s.editedText || s.rawText)
       .filter(Boolean)
       .join('\n\n');
@@ -339,6 +374,8 @@ export function RecorderScreen() {
     setCurrentName(generateTimestamp());
     setInputLevel(0);
     setLiveSegments([]);
+    setLiveEditorText('');
+    liveTasksRef.current.clear();
     activeIdRef.current = '';
     stoppingRef.current = false;
     setTimeout(() => setStatusMsg(''), 6000);
@@ -371,7 +408,8 @@ export function RecorderScreen() {
   }
 
   return (
-    <div className="screen flex flex-col gap-5 pb-4">
+    <div className={`screen flex flex-col gap-5 pb-4 ${isRecording || isPaused ? 'min-h-[calc(100vh-72px)]' : ''}`}>
+      {!isRecording && !isPaused && (
       <div className="card flex flex-col gap-3">
         <div>
           <label className="field-label">Proyecto / Carpeta</label>
@@ -413,23 +451,37 @@ export function RecorderScreen() {
           />
         </div>
       </div>
+      )}
 
-      <div className="flex flex-col items-center gap-1">
-        <div className={`timer-display ${isRecording ? 'text-brand-500' : isPaused ? 'text-amber-500' : 'text-gray-400 dark:text-gray-600'}`}>
-          {timerLabel}
+      {(isRecording || isPaused) ? (
+        <div className="sticky top-0 z-10 -mx-4 px-4 py-3 bg-gray-50/95 dark:bg-gray-950/95 backdrop-blur border-b border-gray-100 dark:border-gray-800">
+          <div className="flex items-center gap-3">
+            <div className={`h-2.5 w-2.5 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-amber-500'}`} />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-gray-900 dark:text-white">
+                {currentName || generateTimestamp()}
+              </p>
+              <p className="truncate text-xs text-gray-500 dark:text-gray-400">
+                {currentProject || 'General'} · {timerLabel}
+              </p>
+            </div>
+            {liveSegments.some((segment) => segment.status === 'transcribing') && (
+              <Loader2 size={16} className="animate-spin text-brand-500" />
+            )}
+          </div>
         </div>
-        {autoStopEnabled && isRecording && (
-          <p className="text-xs text-gray-400">tiempo restante</p>
-        )}
-        {isPaused && (
-          <p className="text-xs text-amber-500 font-medium">PAUSADO</p>
-        )}
-        {isProcessing && (
-          <p className="text-xs text-brand-500 animate-pulse font-medium">
-            {statusMsg || 'Procesando...'}
-          </p>
-        )}
-      </div>
+      ) : (
+        <div className="flex flex-col items-center gap-1">
+          <div className={`timer-display ${isProcessing ? 'text-brand-500' : 'text-gray-400 dark:text-gray-600'}`}>
+            {timerLabel}
+          </div>
+          {isProcessing && (
+            <p className="text-xs text-brand-500 animate-pulse font-medium">
+              {statusMsg || 'Procesando...'}
+            </p>
+          )}
+        </div>
+      )}
 
       {(isRecording || isPaused) && (
         <div className="px-2 flex flex-col gap-2">
@@ -460,7 +512,26 @@ export function RecorderScreen() {
         </div>
       )}
 
-      <div className="flex items-center justify-center gap-6">
+      {(isRecording || isPaused) && (
+        <div className="relative flex-1 min-h-[46vh] rounded-xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-sm overflow-hidden">
+          <textarea
+            className="h-full min-h-[46vh] w-full resize-none bg-transparent px-4 py-4 text-[17px] leading-7 text-gray-900 dark:text-gray-100 outline-none"
+            value={liveEditorText}
+            onChange={(e) => setLiveEditorText(e.target.value)}
+            placeholder="Empieza a hablar..."
+          />
+          {!liveEditorText && (
+            <div className="pointer-events-none absolute left-4 top-[58px] h-6 border-l-2 border-dotted border-brand-500 animate-pulse" />
+          )}
+          {liveSegments.some((segment) => segment.status === 'transcribing') && (
+            <div className="absolute bottom-3 right-3 rounded-full bg-brand-500/90 px-3 py-1 text-xs font-medium text-white shadow">
+              escribiendo...
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className={`flex items-center justify-center gap-6 ${isRecording || isPaused ? 'sticky bottom-3 z-10' : ''}`}>
         {isIdle && (
           <>
             <input
@@ -504,39 +575,6 @@ export function RecorderScreen() {
       {statusMsg && !isProcessing && (
         <div className="text-center text-sm text-gray-500 dark:text-gray-400 px-4">
           {statusMsg}
-        </div>
-      )}
-
-      {(isRecording || isPaused || liveSegments.length > 0) && (
-        <div className="card flex flex-col gap-3">
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="section-title flex items-center gap-2">
-              <FileText size={14} /> Transcripcion en vivo
-            </h3>
-            <span className="text-xs text-gray-400">{liveSegments.length} segmentos</span>
-          </div>
-          {liveSegments.length === 0 ? (
-            <p className="text-sm text-gray-400">Habla y hare cortes automaticos cuando haya pausas.</p>
-          ) : (
-            <div className="max-h-64 overflow-y-auto flex flex-col gap-2 pr-1">
-              {liveSegments.map((segment) => (
-                <div key={segment.id} className="rounded-lg bg-gray-50 dark:bg-gray-900 p-3">
-                  <div className="flex items-center justify-between gap-2 text-[11px] text-gray-400 mb-1">
-                    <span>{formatDuration(segment.start)} - {formatDuration(segment.end)}</span>
-                    {segment.status === 'transcribing' && (
-                      <span className="flex items-center gap-1 text-brand-500">
-                        <Loader2 size={11} className="animate-spin" /> transcribiendo
-                      </span>
-                    )}
-                    {segment.status === 'error' && <span className="text-amber-500">error</span>}
-                  </div>
-                  <p className="text-sm leading-relaxed text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
-                    {segment.editedText || segment.rawText || 'Pendiente de transcripcion...'}
-                  </p>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
 

@@ -31,6 +31,7 @@ type SegmentCallback = (segment: RecordedSegment) => void;
 type RecorderOptions = {
   autoGain?: boolean;
   silenceSeconds?: number;
+  maxSegmentSeconds?: number;
   onDuration: DurationCallback;
   onLevel?: LevelCallback;
   onGain?: GainCallback;
@@ -59,6 +60,7 @@ class AudioRecorder {
   private inputGain = 1;
   private autoGain = false;
   private silenceSeconds = 2.5;
+  private maxSegmentSeconds = 8;
   private segmentEncoder: Mp3Encoder | null = null;
   private segmentChunks: Int8Array[] = [];
   private segmentStart = 0;
@@ -73,6 +75,7 @@ class AudioRecorder {
     this.onSegment = options.onSegment ?? null;
     this.autoGain = options.autoGain ?? false;
     this.silenceSeconds = options.silenceSeconds ?? 2.5;
+    this.maxSegmentSeconds = options.maxSegmentSeconds ?? 8;
     const Mp3Encoder = window.lamejs?.Mp3Encoder;
     if (!Mp3Encoder) throw new Error('No se pudo cargar el codificador MP3');
 
@@ -283,6 +286,11 @@ class AudioRecorder {
 
     if (this.segmentHasVoice && now - this.lastVoiceAt >= this.silenceSeconds) {
       this.finalizeSegment(Math.max(this.segmentStart, this.lastVoiceAt));
+      return;
+    }
+
+    if (this.segmentHasVoice && now - this.segmentStart >= this.maxSegmentSeconds) {
+      this.finalizeSegment(now);
     }
   }
 
