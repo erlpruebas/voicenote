@@ -37,6 +37,7 @@ export function SettingsScreen() {
     loadKeys,
     recordingGain, setRecordingGain,
     autoGainEnabled, setAutoGainEnabled,
+    mediaServerUrl, setMediaServerUrl,
   } = useStore();
 
   const [expanded, setExpanded] = useState<string | null>(activeProvider);
@@ -189,6 +190,27 @@ export function SettingsScreen() {
             </p>
           )}
           {folderMsg && <p className="text-xs text-green-600 dark:text-green-400">{folderMsg}</p>}
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <h3 className="section-title">Servidor multimedia</h3>
+        <div className="card flex flex-col gap-3">
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Convierte audios y videos a MP3 ligero antes de transcribir. Para el servidor local usa normalmente <code>http://IP_DEL_PC:8787</code>.
+          </p>
+          <div>
+            <label className="field-label">URL del servidor</label>
+            <input
+              className="field text-sm"
+              placeholder="http://192.168.1.50:8787"
+              value={mediaServerUrl}
+              onChange={(e) => setMediaServerUrl(e.target.value)}
+            />
+          </div>
+          <p className="text-xs text-gray-400">
+            En el movil no uses localhost salvo que el servidor corra en el propio movil.
+          </p>
         </div>
       </section>
 

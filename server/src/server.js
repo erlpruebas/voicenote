@@ -1,0 +1,82 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import express from 'express';
+import cors from 'cors';
+import multer from 'multer';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+
+const PORT = Number(process.env.PORT || 8787);
+const MAX_FILE_MB = Number(process.env.MAX_FILE_MB || 2048);
+const TMP_DIR = path.join(os.tmpdir(), 'voicenote-media');
+
+fs.mkdirSync(TMP_DIR, { recursive: true });
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+
+const upload = multer({
+  dest: TMP_DIR,
+  limits: {
+    fileSize: MAX_FILE_MB * 1024 * 1024,
+  },
+});
+
+const app = express();
+app.use(cors());
+
+app.get('/health', (_req, res) => {
+  res.json({ ok: true, service: 'voicenote-media-server' });
+});
+
+app.post('/convert', upload.single('file'), async (req, res) => {
+  const input = req.file;
+  if (!input) {
+    res.status(400).send('No se recibio ningun archivo.');
+    return;
+  }
+
+  const outputName = `${crypto.randomUUID()}.mp3`;
+  const outputPath = path.join(TMP_DIR, outputName);
+
+  try {
+    await convertToMp3(input.path, outputPath);
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeBaseName(input.originalname)}.mp3"`);
+    const stream = fs.createReadStream(outputPath);
+    stream.pipe(res);
+    stream.on('close', () => cleanup(input.path, outputPath));
+  } catch (error) {
+    cleanup(input.path, outputPath);
+    res.status(500).send(`Conversion fallida: ${error.message}`);
+  }
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`VoiceNote media server listening on http://0.0.0.0:${PORT}`);
+  console.log(`Max upload: ${MAX_FILE_MB} MB`);
+});
+
+function convertToMp3(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .noVideo()
+      .audioChannels(1)
+      .audioFrequency(16000)
+      .audioBitrate('32k')
+      .format('mp3')
+      .on('end', resolve)
+      .on('error', reject)
+      .save(outputPath);
+  });
+}
+
+function safeBaseName(fileName) {
+  return path.basename(fileName, path.extname(fileName)).replace(/[^\w.-]+/g, '_') || 'audio';
+}
+
+function cleanup(...paths) {
+  for (const filePath of paths) {
+    fs.promises.unlink(filePath).catch(() => {});
+  }
+}

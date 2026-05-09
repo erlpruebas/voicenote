@@ -1,12 +1,11 @@
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
-import { FolderOpen, Loader2, Mic, Pause, Play, Square } from 'lucide-react';
+import { FolderOpen, Mic, Pause, Play, Square } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { audioRecorder } from '../services/audioRecorder';
 import { transcribe } from '../services/transcription';
 import {
   saveAudio,
   saveCachedAudio,
-  saveCachedSegmentAudio,
   saveCachedSession,
   saveCachedTranscript,
   saveTranscript,
@@ -16,10 +15,13 @@ import {
   formatDuration,
   isFileSystemSupported,
 } from '../services/fileStorage';
+import { convertToLightMp3, isMp3File, mediaBaseName } from '../services/mediaConversion';
 import { estimateGeminiTranscriptionCostUsd, formatUsd } from '../services/cost';
-import { Recording, TranscriptSegment, VoiceNoteSession } from '../types';
+import { Recording, VoiceNoteSession } from '../types';
 
 const LARGE_AUDIO_WARNING_MB = 20;
+const ACCEPTED_MEDIA =
+  'audio/*,video/*,.mp3,.mp4,.m4a,.ogg,.opus,.wav,.webm,.aac,.3gp,.amr,.flac,.mov,.mkv';
 
 export function RecorderScreen() {
   const {
@@ -31,6 +33,7 @@ export function RecorderScreen() {
     autoStopMinutes, setAutoStopMinutes,
     recordingGain, setRecordingGain,
     autoGainEnabled,
+    mediaServerUrl,
     activeProvider, providers, prompt,
     addRecording, updateRecording, rootFolderName,
     projectNames, recordings,
@@ -38,20 +41,8 @@ export function RecorderScreen() {
 
   const [statusMsg, setStatusMsg] = useState('');
   const [inputLevel, setInputLevel] = useState(0);
-  const [liveSegments, setLiveSegments] = useState<TranscriptSegment[]>([]);
-  const [liveEditorText, setLiveEditorText] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const stoppingRef = useRef(false);
-  const activeIdRef = useRef('');
-  const liveSegmentsRef = useRef<TranscriptSegment[]>([]);
-  const liveEditorTextRef = useRef('');
-  const savedEditorTextRef = useRef('');
-  const typingQueueRef = useRef('');
-  const typingTimerRef = useRef<number | null>(null);
-  const autoScrollRef = useRef(true);
-  const autoScrollResumeTimerRef = useRef<number | null>(null);
-  const liveTasksRef = useRef<Set<Promise<void>>>(new Set());
 
   useEffect(() => {
     if (!currentName) setCurrentName(generateTimestamp());
@@ -78,21 +69,6 @@ export function RecorderScreen() {
   }, [recordingGain]);
 
   useEffect(() => {
-    liveSegmentsRef.current = liveSegments;
-  }, [liveSegments]);
-
-  useEffect(() => {
-    liveEditorTextRef.current = liveEditorText;
-  }, [liveEditorText]);
-
-  useEffect(() => {
-    return () => {
-      if (typingTimerRef.current) window.clearInterval(typingTimerRef.current);
-      if (autoScrollResumeTimerRef.current) window.clearTimeout(autoScrollResumeTimerRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
     if (
       isRecording &&
       autoStopEnabled &&
@@ -106,38 +82,19 @@ export function RecorderScreen() {
   async function handleStart() {
     try {
       const name = currentName || generateTimestamp();
-      const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      activeIdRef.current = id;
       setCurrentName(name);
       setElapsedSeconds(0);
       setRecordingStatus('recording');
       setStatusMsg('');
       setInputLevel(0);
-      setLiveSegments([]);
-      setLiveEditorText('');
-      savedEditorTextRef.current = '';
-      typingQueueRef.current = '';
-      if (typingTimerRef.current) window.clearInterval(typingTimerRef.current);
-      typingTimerRef.current = null;
-      autoScrollRef.current = true;
-      if (autoScrollResumeTimerRef.current) window.clearTimeout(autoScrollResumeTimerRef.current);
-      autoScrollResumeTimerRef.current = null;
-      liveTasksRef.current.clear();
       stoppingRef.current = false;
       audioRecorder.setGain(recordingGain);
 
       await audioRecorder.start({
         autoGain: autoGainEnabled,
-        silenceSeconds: 0.45,
-        maxSegmentSeconds: 4.5,
         onDuration: (s) => setElapsedSeconds(s),
         onLevel: (level) => setInputLevel((prev) => prev * 0.65 + level * 0.35),
         onGain: (gain) => setRecordingGain(gain),
-        onSegment: (segment) => {
-          const task = handleLiveSegment(id, segment);
-          liveTasksRef.current.add(task);
-          task.finally(() => liveTasksRef.current.delete(task));
-        },
       });
     } catch (err) {
       setRecordingStatus('idle');
@@ -164,10 +121,6 @@ export function RecorderScreen() {
     let blob: Blob;
     try {
       blob = await audioRecorder.stop();
-      if (liveTasksRef.current.size > 0) {
-        setStatusMsg('Terminando transcripcion en vivo...');
-        await waitForLiveTranscriptionTasks();
-      }
     } catch (err) {
       setRecordingStatus('idle');
       setInputLevel(0);
@@ -176,16 +129,7 @@ export function RecorderScreen() {
       return;
     }
 
-    await processAudioBlob(blob, elapsedSeconds, currentName || generateTimestamp(), true, activeIdRef.current);
-  }
-
-  async function waitForLiveTranscriptionTasks() {
-    const tasks = Array.from(liveTasksRef.current);
-    if (tasks.length === 0) return;
-    await Promise.race([
-      Promise.allSettled(tasks),
-      new Promise((resolve) => window.setTimeout(resolve, 12000)),
-    ]);
+    await processAudioBlob(blob, elapsedSeconds, currentName || generateTimestamp(), true);
   }
 
   async function handleFileSelected(e: ChangeEvent<HTMLInputElement>) {
@@ -193,153 +137,42 @@ export function RecorderScreen() {
     e.target.value = '';
     if (!file) return;
 
-    if (!/\.mp3$/i.test(file.name) && file.type !== 'audio/mpeg') {
-      setStatusMsg('Selecciona un archivo MP3.');
-      return;
-    }
-
-    if (file.size > LARGE_AUDIO_WARNING_MB * 1024 * 1024) {
-      const ok = window.confirm(
-        `El MP3 pesa ${(file.size / (1024 * 1024)).toFixed(1)} MB. ` +
-        `Algunos proveedores rechazan archivos de mas de ${LARGE_AUDIO_WARNING_MB} MB. ` +
-        'Puedes guardarlo e intentar transcribirlo igualmente?'
-      );
-      if (!ok) return;
-    }
-
-    const baseName = file.name.replace(/\.mp3$/i, '') || generateTimestamp();
+    const baseName = mediaBaseName(file.name) || generateTimestamp();
     setCurrentName(baseName);
     setElapsedSeconds(0);
     setRecordingStatus('processing');
-    setStatusMsg('Cargando MP3...');
-
-    const duration = await getAudioDuration(file).catch(() => 0);
-    await processAudioBlob(file, duration, baseName, false);
-  }
-
-  async function handleLiveSegment(
-    recordingId: string,
-    segment: { id: string; start: number; end: number; blob: Blob }
-  ) {
-    const item: TranscriptSegment = {
-      id: segment.id,
-      start: segment.start,
-      end: segment.end,
-      rawText: '',
-      editedText: '',
-      highlighted: false,
-      note: '',
-      status: 'pending',
-    };
-
-    setLiveSegments((items) => [...items, item]);
-    await saveCachedSegmentAudio(recordingId, segment.id, segment.blob).catch(() => {});
-
-    const provider = providers.find((p) => p.id === activeProvider);
-    if (!provider?.apiKey) return;
-
-    setLiveSegments((items) => items.map((s) => (
-      s.id === segment.id ? { ...s, status: 'transcribing' } : s
-    )));
+    setStatusMsg(isMp3File(file) ? 'Cargando MP3...' : 'Convirtiendo archivo a MP3 ligero...');
 
     try {
-      const context = liveSegmentsRef.current
-        .slice(-4)
-        .map((s) => s.editedText || s.rawText)
-        .filter(Boolean)
-        .join('\n');
-      const livePrompt = context
-        ? `${prompt}\n\nContexto anterior para mantener continuidad terminologica, sin inventar contenido:\n${context}`
-        : prompt;
-      const text = await transcribe(segment.blob, provider, livePrompt);
-      const cleanText = text.trim();
-      setLiveSegments((items) => items.map((s) => (
-        s.id === segment.id
-          ? { ...s, rawText: cleanText, editedText: cleanText, status: 'done' }
-          : s
-      )));
-      if (cleanText) {
-        queueLiveText(cleanText);
+      const mp3Blob = isMp3File(file)
+        ? file
+        : await convertToLightMp3(file, mediaServerUrl);
+
+      if (mp3Blob.size > LARGE_AUDIO_WARNING_MB * 1024 * 1024) {
+        const ok = window.confirm(
+          `El MP3 pesa ${(mp3Blob.size / (1024 * 1024)).toFixed(1)} MB. ` +
+          `Algunos proveedores rechazan archivos de mas de ${LARGE_AUDIO_WARNING_MB} MB. ` +
+          'Puedes guardarlo e intentar transcribirlo igualmente?'
+        );
+        if (!ok) {
+          setRecordingStatus('idle');
+          setStatusMsg('');
+          return;
+        }
       }
+
+      const duration = await getAudioDuration(mp3Blob).catch(() => 0);
+      await processAudioBlob(mp3Blob, duration, baseName, false);
     } catch (err) {
-      setLiveSegments((items) => items.map((s) => (
-        s.id === segment.id
-          ? { ...s, status: 'error', error: (err as Error).message }
-          : s
-      )));
+      setRecordingStatus('idle');
+      stoppingRef.current = false;
+      setStatusMsg(`No se pudo preparar el archivo: ${(err as Error).message}`);
     }
   }
 
-  function queueLiveText(text: string) {
-    const separator = savedEditorTextRef.current.trim() ? '\n\n' : '';
-    savedEditorTextRef.current = `${savedEditorTextRef.current.trimEnd()}${separator}${text}`;
-    typingQueueRef.current += `${typingQueueRef.current || liveEditorTextRef.current.trim() ? separator : ''}${text}`;
-    startTypingQueue();
-  }
-
-  function startTypingQueue() {
-    if (typingTimerRef.current) return;
-    typingTimerRef.current = window.setInterval(() => {
-      const next = typingQueueRef.current;
-      if (!next) {
-        if (typingTimerRef.current) window.clearInterval(typingTimerRef.current);
-        typingTimerRef.current = null;
-        return;
-      }
-
-      const chunkSize = next.startsWith('\n') ? 2 : Math.min(8, next.length);
-      const chunk = next.slice(0, chunkSize);
-      typingQueueRef.current = next.slice(chunk.length);
-      setLiveEditorText((current) => {
-        const updated = `${current}${chunk}`;
-        liveEditorTextRef.current = updated;
-        return updated;
-      });
-      scrollEditorToBottom();
-    }, 28);
-  }
-
-  function scrollEditorToBottom() {
-    if (!autoScrollRef.current) return;
-    window.requestAnimationFrame(() => {
-      const editor = editorRef.current;
-      if (editor) editor.scrollTop = editor.scrollHeight;
-    });
-  }
-
-  function handleEditorScroll() {
-    const editor = editorRef.current;
-    if (!editor) return;
-    const distanceFromBottom = editor.scrollHeight - editor.scrollTop - editor.clientHeight;
-    if (distanceFromBottom < 64) {
-      autoScrollRef.current = true;
-      if (autoScrollResumeTimerRef.current) window.clearTimeout(autoScrollResumeTimerRef.current);
-      autoScrollResumeTimerRef.current = null;
-      return;
-    }
-    pauseAutoScroll();
-  }
-
-  function pauseAutoScroll(ms = 7000) {
-    autoScrollRef.current = false;
-    if (autoScrollResumeTimerRef.current) window.clearTimeout(autoScrollResumeTimerRef.current);
-    autoScrollResumeTimerRef.current = window.setTimeout(() => {
-      autoScrollRef.current = true;
-      scrollEditorToBottom();
-    }, ms);
-  }
-
-  function handleEditorChange(value: string) {
-    setLiveEditorText(value);
-    liveEditorTextRef.current = value;
-    savedEditorTextRef.current = value;
-    pauseAutoScroll();
-  }
-
-  async function processAudioBlob(blob: Blob, duration: number, baseName: string, autoTranscribe: boolean, existingId?: string) {
+  async function processAudioBlob(blob: Blob, duration: number, baseName: string, autoTranscribe: boolean) {
     const project = currentProject || 'General';
-    const id = existingId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const segments = liveSegmentsRef.current;
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     try {
       await saveCachedAudio(id, blob);
@@ -364,48 +197,16 @@ export function RecorderScreen() {
       duration,
       fileSize: blob.size,
       transcribed: false,
-      segmentCount: segments.length,
     };
     addRecording(rec);
     updateRecording(id, { audioName, name: audioName.replace(/\.mp3$/i, '') });
 
-    const visibleTranscript = (savedEditorTextRef.current || liveEditorTextRef.current).trim();
-    let transcriptText = visibleTranscript || segments
-      .map((s) => s.editedText || s.rawText)
-      .filter(Boolean)
-      .join('\n\n');
-    const hasLiveTranscript = transcriptText.trim().length > 0;
-
-    if (hasLiveTranscript) {
-      await saveTranscript(transcriptText, project, audioName);
-      await saveCachedTranscript(id, transcriptText);
-      const session: VoiceNoteSession = {
-        version: 1,
-        id,
-        name: audioName.replace(/\.mp3$/i, ''),
-        project,
-        audioFile: audioName,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        duration,
-        segments,
-      };
-      const sessionJson = JSON.stringify(session, null, 2);
-      const sessionName = await saveSessionFile(sessionJson, project, audioName);
-      await saveCachedSession(id, sessionJson);
-      updateRecording(id, {
-        transcribed: true,
-        sessionName,
-        segmentCount: segments.length,
-      });
-      setStatusMsg(`Guardado con ${segments.length} segmentos transcritos.`);
-    } else if (autoTranscribe) {
+    if (autoTranscribe) {
       const provider = providers.find((p) => p.id === activeProvider);
       if (provider?.apiKey) {
         setStatusMsg('Transcribiendo...');
         try {
           const text = await transcribe(blob, provider, prompt);
-          transcriptText = text;
           await saveTranscript(text, project, audioName);
           await saveCachedTranscript(id, text);
           const session: VoiceNoteSession = {
@@ -456,21 +257,11 @@ export function RecorderScreen() {
     setRecordingStatus('idle');
     setCurrentName(generateTimestamp());
     setInputLevel(0);
-    setLiveSegments([]);
-    setLiveEditorText('');
-    savedEditorTextRef.current = '';
-    typingQueueRef.current = '';
-    if (typingTimerRef.current) window.clearInterval(typingTimerRef.current);
-    typingTimerRef.current = null;
-    if (autoScrollResumeTimerRef.current) window.clearTimeout(autoScrollResumeTimerRef.current);
-    autoScrollResumeTimerRef.current = null;
-    liveTasksRef.current.clear();
-    activeIdRef.current = '';
     stoppingRef.current = false;
     setTimeout(() => setStatusMsg(''), 6000);
   }
 
-  function getAudioDuration(file: File): Promise<number> {
+  function getAudioDuration(file: Blob): Promise<number> {
     return new Promise((resolve, reject) => {
       const audio = document.createElement('audio');
       const url = URL.createObjectURL(file);
@@ -497,8 +288,7 @@ export function RecorderScreen() {
   }
 
   return (
-    <div className={`screen flex flex-col gap-5 pb-4 ${isRecording || isPaused ? 'min-h-[calc(100vh-72px)]' : ''}`}>
-      {!isRecording && !isPaused && (
+    <div className="screen flex flex-col gap-5 pb-4">
       <div className="card flex flex-col gap-3">
         <div>
           <label className="field-label">Proyecto / Carpeta</label>
@@ -540,37 +330,23 @@ export function RecorderScreen() {
           />
         </div>
       </div>
-      )}
 
-      {(isRecording || isPaused) ? (
-        <div className="sticky top-0 z-10 -mx-4 px-4 py-3 bg-gray-50/95 dark:bg-gray-950/95 backdrop-blur border-b border-gray-100 dark:border-gray-800">
-          <div className="flex items-center gap-3">
-            <div className={`h-2.5 w-2.5 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-amber-500'}`} />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-gray-900 dark:text-white">
-                {currentName || generateTimestamp()}
-              </p>
-              <p className="truncate text-xs text-gray-500 dark:text-gray-400">
-                {currentProject || 'General'} · {timerLabel}
-              </p>
-            </div>
-            {liveSegments.some((segment) => segment.status === 'transcribing') && (
-              <Loader2 size={16} className="animate-spin text-brand-500" />
-            )}
-          </div>
+      <div className="flex flex-col items-center gap-1">
+        <div className={`timer-display ${isRecording ? 'text-brand-500' : isPaused ? 'text-amber-500' : 'text-gray-400 dark:text-gray-600'}`}>
+          {timerLabel}
         </div>
-      ) : (
-        <div className="flex flex-col items-center gap-1">
-          <div className={`timer-display ${isProcessing ? 'text-brand-500' : 'text-gray-400 dark:text-gray-600'}`}>
-            {timerLabel}
-          </div>
-          {isProcessing && (
-            <p className="text-xs text-brand-500 animate-pulse font-medium">
-              {statusMsg || 'Procesando...'}
-            </p>
-          )}
-        </div>
-      )}
+        {autoStopEnabled && isRecording && (
+          <p className="text-xs text-gray-400">tiempo restante</p>
+        )}
+        {isPaused && (
+          <p className="text-xs text-amber-500 font-medium">PAUSADO</p>
+        )}
+        {isProcessing && (
+          <p className="text-xs text-brand-500 animate-pulse font-medium">
+            {statusMsg || 'Procesando...'}
+          </p>
+        )}
+      </div>
 
       {(isRecording || isPaused) && (
         <div className="px-2 flex flex-col gap-2">
@@ -601,43 +377,19 @@ export function RecorderScreen() {
         </div>
       )}
 
-      {(isRecording || isPaused) && (
-        <div className="relative flex-1 min-h-[46vh] rounded-xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-sm overflow-hidden">
-          <textarea
-            ref={editorRef}
-            className="h-full min-h-[46vh] w-full resize-none bg-transparent px-4 py-4 text-[17px] leading-7 text-gray-900 dark:text-gray-100 outline-none"
-            value={liveEditorText}
-            onChange={(e) => handleEditorChange(e.target.value)}
-            onScroll={handleEditorScroll}
-            onPointerDown={() => pauseAutoScroll()}
-            onKeyDown={() => pauseAutoScroll()}
-            onSelect={() => pauseAutoScroll(9000)}
-            placeholder="Empieza a hablar..."
-          />
-          {!liveEditorText && (
-            <div className="pointer-events-none absolute left-4 top-[58px] h-6 border-l-2 border-dotted border-brand-500 animate-pulse" />
-          )}
-          {liveSegments.some((segment) => segment.status === 'transcribing') && (
-            <div className="absolute bottom-3 right-3 rounded-full bg-brand-500/90 px-3 py-1 text-xs font-medium text-white shadow">
-              escribiendo...
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className={`flex items-center justify-center gap-6 ${isRecording || isPaused ? 'sticky bottom-3 z-10' : ''}`}>
+      <div className="flex items-center justify-center gap-6">
         {isIdle && (
           <>
             <input
               ref={fileInputRef}
               type="file"
-              accept="audio/mpeg,.mp3"
+              accept={ACCEPTED_MEDIA}
               className="hidden"
               onChange={handleFileSelected}
             />
             <button
               className="secondary-btn"
-              title="Cargar archivo MP3"
+              title="Cargar audio o video"
               onClick={() => fileInputRef.current?.click()}
             >
               <FolderOpen size={22} />
@@ -673,32 +425,32 @@ export function RecorderScreen() {
       )}
 
       {!isRecording && !isPaused && (
-      <div className="card flex items-center justify-between gap-3">
-        <label className="flex items-center gap-3 cursor-pointer min-w-0">
-          <input
-            type="checkbox"
-            className="h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-500"
-            checked={autoStopEnabled}
-            onChange={(e) => setAutoStopEnabled(e.target.checked)}
-            disabled={isRecording || isPaused || isProcessing}
-          />
-          <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-            Parada automatica
-          </span>
-        </label>
-        <div className="flex items-center gap-2 shrink-0">
-          <input
-            type="number"
-            min={1}
-            max={480}
-            className="field w-20 text-center"
-            value={autoStopMinutes}
-            onChange={(e) => setAutoStopMinutes(Math.max(1, Number(e.target.value) || 1))}
-            disabled={!autoStopEnabled || isRecording || isPaused || isProcessing}
-          />
-          <span className="text-sm text-gray-500 dark:text-gray-400">min</span>
+        <div className="card flex items-center justify-between gap-3">
+          <label className="flex items-center gap-3 cursor-pointer min-w-0">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-500"
+              checked={autoStopEnabled}
+              onChange={(e) => setAutoStopEnabled(e.target.checked)}
+              disabled={isRecording || isPaused || isProcessing}
+            />
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Parada automatica
+            </span>
+          </label>
+          <div className="flex items-center gap-2 shrink-0">
+            <input
+              type="number"
+              min={1}
+              max={480}
+              className="field w-20 text-center"
+              value={autoStopMinutes}
+              onChange={(e) => setAutoStopMinutes(Math.max(1, Number(e.target.value) || 1))}
+              disabled={!autoStopEnabled || isRecording || isPaused || isProcessing}
+            />
+            <span className="text-sm text-gray-500 dark:text-gray-400">min</span>
+          </div>
         </div>
-      </div>
       )}
 
       <div className="mt-auto text-center">

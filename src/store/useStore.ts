@@ -99,6 +99,7 @@ interface StoreState {
   autoStopMinutes: number;
   recordingGain: number;
   autoGainEnabled: boolean;
+  mediaServerUrl: string;
   projectNames: string[];
   rootFolderName: string | null;
 
@@ -120,6 +121,7 @@ interface StoreState {
   setAutoStopMinutes: (m: number) => void;
   setRecordingGain: (g: number) => void;
   setAutoGainEnabled: (enabled: boolean) => void;
+  setMediaServerUrl: (url: string) => void;
   setRootFolderName: (name: string | null) => void;
 
   setRecordingStatus: (s: RecordingStatus) => void;
@@ -149,6 +151,7 @@ export const useStore = create<StoreState>()(
       autoStopMinutes: 90,
       recordingGain: 1,
       autoGainEnabled: true,
+      mediaServerUrl: 'http://localhost:8787',
       projectNames: ['General'],
       rootFolderName: null,
 
@@ -175,6 +178,7 @@ export const useStore = create<StoreState>()(
       setRecordingGain: (recordingGain) =>
         set({ recordingGain: Math.max(0.1, Math.min(10, recordingGain)) }),
       setAutoGainEnabled: (autoGainEnabled) => set({ autoGainEnabled }),
+      setMediaServerUrl: (mediaServerUrl) => set({ mediaServerUrl }),
       setRootFolderName: (rootFolderName) => set({ rootFolderName }),
 
       setRecordingStatus: (recordingStatus) => set({ recordingStatus }),
@@ -224,6 +228,7 @@ export const useStore = create<StoreState>()(
         autoStopMinutes: s.autoStopMinutes,
         recordingGain: s.recordingGain,
         autoGainEnabled: s.autoGainEnabled,
+        mediaServerUrl: s.mediaServerUrl,
         projectNames: s.projectNames,
         currentProject: s.currentProject,
         autoStopEnabled: s.autoStopEnabled,
@@ -242,6 +247,7 @@ export const useStore = create<StoreState>()(
           autoStopMinutes: state.autoStopMinutes ?? 90,
           recordingGain: state.recordingGain ?? 1,
           autoGainEnabled: state.autoGainEnabled ?? true,
+          mediaServerUrl: state.mediaServerUrl ?? 'http://localhost:8787',
           projectNames: state.projectNames ?? ['General'],
           currentProject: state.currentProject ?? '',
           autoStopEnabled: state.autoStopEnabled ?? false,

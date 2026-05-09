@@ -264,6 +264,8 @@ class AudioRecorder {
   }
 
   private handleSegment(pcm: Float32Array, stats: ReturnType<AudioRecorder['measure']>) {
+    if (!this.onSegment) return;
+
     const now = this.elapsed();
     const bufferSeconds = pcm.length / (this.audioContext?.sampleRate ?? SAMPLE_RATE);
 
