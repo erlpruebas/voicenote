@@ -100,6 +100,7 @@ interface StoreState {
   recordingGain: number;
   autoGainEnabled: boolean;
   mediaServerUrl: string;
+  mediaServerToken: string;
   projectNames: string[];
   rootFolderName: string | null;
 
@@ -122,6 +123,7 @@ interface StoreState {
   setRecordingGain: (g: number) => void;
   setAutoGainEnabled: (enabled: boolean) => void;
   setMediaServerUrl: (url: string) => void;
+  setMediaServerToken: (token: string) => void;
   setRootFolderName: (name: string | null) => void;
 
   setRecordingStatus: (s: RecordingStatus) => void;
@@ -152,6 +154,7 @@ export const useStore = create<StoreState>()(
       recordingGain: 1,
       autoGainEnabled: true,
       mediaServerUrl: 'http://localhost:8787',
+      mediaServerToken: '',
       projectNames: ['General'],
       rootFolderName: null,
 
@@ -179,6 +182,7 @@ export const useStore = create<StoreState>()(
         set({ recordingGain: Math.max(0.1, Math.min(10, recordingGain)) }),
       setAutoGainEnabled: (autoGainEnabled) => set({ autoGainEnabled }),
       setMediaServerUrl: (mediaServerUrl) => set({ mediaServerUrl }),
+      setMediaServerToken: (mediaServerToken) => set({ mediaServerToken }),
       setRootFolderName: (rootFolderName) => set({ rootFolderName }),
 
       setRecordingStatus: (recordingStatus) => set({ recordingStatus }),
@@ -229,6 +233,7 @@ export const useStore = create<StoreState>()(
         recordingGain: s.recordingGain,
         autoGainEnabled: s.autoGainEnabled,
         mediaServerUrl: s.mediaServerUrl,
+        mediaServerToken: s.mediaServerToken,
         projectNames: s.projectNames,
         currentProject: s.currentProject,
         autoStopEnabled: s.autoStopEnabled,
@@ -248,6 +253,7 @@ export const useStore = create<StoreState>()(
           recordingGain: state.recordingGain ?? 1,
           autoGainEnabled: state.autoGainEnabled ?? true,
           mediaServerUrl: state.mediaServerUrl ?? 'http://localhost:8787',
+          mediaServerToken: state.mediaServerToken ?? '',
           projectNames: state.projectNames ?? ['General'],
           currentProject: state.currentProject ?? '',
           autoStopEnabled: state.autoStopEnabled ?? false,

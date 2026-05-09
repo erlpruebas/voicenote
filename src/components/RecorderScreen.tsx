@@ -33,7 +33,7 @@ export function RecorderScreen() {
     autoStopMinutes, setAutoStopMinutes,
     recordingGain, setRecordingGain,
     autoGainEnabled,
-    mediaServerUrl,
+    mediaServerUrl, mediaServerToken,
     activeProvider, providers, prompt,
     addRecording, updateRecording, rootFolderName,
     projectNames, recordings,
@@ -146,7 +146,7 @@ export function RecorderScreen() {
     try {
       const mp3Blob = isMp3File(file)
         ? file
-        : await convertToLightMp3(file, mediaServerUrl);
+        : await convertToLightMp3(file, mediaServerUrl, mediaServerToken);
 
       if (mp3Blob.size > LARGE_AUDIO_WARNING_MB * 1024 * 1024) {
         const ok = window.confirm(

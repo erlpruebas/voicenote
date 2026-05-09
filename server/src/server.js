@@ -10,6 +10,7 @@ import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 
 const PORT = Number(process.env.PORT || 8787);
 const MAX_FILE_MB = Number(process.env.MAX_FILE_MB || 2048);
+const SERVER_TOKEN = process.env.VOICENOTE_SERVER_TOKEN || '';
 const TMP_DIR = path.join(os.tmpdir(), 'voicenote-media');
 
 fs.mkdirSync(TMP_DIR, { recursive: true });
@@ -24,6 +25,22 @@ const upload = multer({
 
 const app = express();
 app.use(cors());
+
+app.use((req, res, next) => {
+  if (!SERVER_TOKEN || req.path === '/health') {
+    next();
+    return;
+  }
+
+  const auth = req.get('authorization') || '';
+  const token = auth.replace(/^Bearer\s+/i, '');
+  if (token === SERVER_TOKEN) {
+    next();
+    return;
+  }
+
+  res.status(401).send('Token del servidor multimedia invalido o ausente.');
+});
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'voicenote-media-server' });
@@ -55,6 +72,7 @@ app.post('/convert', upload.single('file'), async (req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`VoiceNote media server listening on http://0.0.0.0:${PORT}`);
   console.log(`Max upload: ${MAX_FILE_MB} MB`);
+  console.log(`Token required: ${SERVER_TOKEN ? 'yes' : 'no'}`);
 });
 
 function convertToMp3(inputPath, outputPath) {

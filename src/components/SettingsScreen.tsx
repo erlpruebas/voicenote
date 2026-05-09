@@ -38,6 +38,7 @@ export function SettingsScreen() {
     recordingGain, setRecordingGain,
     autoGainEnabled, setAutoGainEnabled,
     mediaServerUrl, setMediaServerUrl,
+    mediaServerToken, setMediaServerToken,
   } = useStore();
 
   const [expanded, setExpanded] = useState<string | null>(activeProvider);
@@ -208,8 +209,18 @@ export function SettingsScreen() {
               onChange={(e) => setMediaServerUrl(e.target.value)}
             />
           </div>
+          <div>
+            <label className="field-label">Token de acceso</label>
+            <input
+              className="field text-sm"
+              type="password"
+              placeholder="Opcional, pero recomendado si esta publicado en internet"
+              value={mediaServerToken}
+              onChange={(e) => setMediaServerToken(e.target.value)}
+            />
+          </div>
           <p className="text-xs text-gray-400">
-            En el movil no uses localhost salvo que el servidor corra en el propio movil.
+            Para acceder desde cualquier sitio usa una URL HTTPS publica del servidor y protege /convert con token.
           </p>
         </div>
       </section>
