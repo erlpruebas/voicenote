@@ -88,12 +88,12 @@ export function PlayerModal() {
           if (sessionJson) {
             try {
               const session = JSON.parse(sessionJson) as VoiceNoteSession;
-              setSegments(session.segments ?? []);
               const segmentText = (session.segments ?? [])
                 .map((s) => s.editedText || s.rawText)
                 .filter(Boolean)
                 .join('\n\n');
               setTranscript(segmentText || text || '');
+              setSegments([]);
               return;
             } catch {
               // Fall through to plain transcript.
@@ -188,7 +188,7 @@ export function PlayerModal() {
         ? estimateGeminiTranscriptionCostUsd(r.duration, text)
         : undefined;
       setTranscript(text);
-      setSegments(session.segments);
+      setSegments([]);
       updateRecording(r.id, {
         transcribed: true,
         transcriptionError: undefined,

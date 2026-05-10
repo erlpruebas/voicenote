@@ -1,5 +1,9 @@
 export function isMp3File(file: File): boolean {
-  return /\.mp3$/i.test(file.name) || file.type === 'audio/mpeg';
+  return isMp3Blob(file, file.name);
+}
+
+export function isMp3Blob(blob: Blob, fileName = ''): boolean {
+  return /\.mp3$/i.test(fileName) || blob.type === 'audio/mpeg' || blob.type === 'audio/mp3';
 }
 
 export function mediaBaseName(fileName: string): string {
@@ -7,11 +11,20 @@ export function mediaBaseName(fileName: string): string {
 }
 
 export async function convertToLightMp3(file: File, serverUrl: string, serverToken: string): Promise<Blob> {
+  return convertBlobToLightMp3(file, file.name, serverUrl, serverToken);
+}
+
+export async function convertBlobToLightMp3(
+  blob: Blob,
+  fileName: string,
+  serverUrl: string,
+  serverToken: string
+): Promise<Blob> {
   const baseUrl = serverUrl.trim().replace(/\/+$/, '');
   if (!baseUrl) throw new Error('Configura el servidor de conversion en Ajustes.');
 
   const form = new FormData();
-  form.append('file', file, file.name);
+  form.append('file', blob, fileName);
   const headers: HeadersInit = {};
   if (serverToken.trim()) {
     headers.Authorization = `Bearer ${serverToken.trim()}`;

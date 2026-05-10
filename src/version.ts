@@ -1,1 +1,1 @@
-export const APP_VERSION = '20260509-220418';
+export const APP_VERSION = '20260510-voice-transcription';

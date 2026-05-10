@@ -2,7 +2,7 @@
 
 Servidor para convertir cualquier fuente con audio (MP3, OGG, MP4, MOV, MKV, WAV, M4A, etc.) a un MP3 ligero antes de transcribir.
 
-La app mantiene la usabilidad principal: grabar, parar, guardar audio y transcribir despues. Este servidor solo se usa cuando cargas un archivo externo que hay que normalizar.
+La app mantiene la usabilidad principal: grabar, parar, convertir a MP3 ligero y transcribir. El servidor se usa para normalizar tanto grabaciones del navegador como archivos externos de audio o video.
 
 ## Copiar a otro ordenador
 

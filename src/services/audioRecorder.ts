@@ -1,5 +1,5 @@
-// Voice-optimised settings: 16 kHz mono 32 kbps ≈ 13.7 MB/hr
-// (stays under Gemini's 20 MB inline limit for recordings up to ~85 min)
+// Voice-optimised settings: 16 kHz mono 32 kbps, about 13.7 MB/hour.
+// MediaRecorder keeps the primary capture alive better when mobile browsers throttle Web Audio.
 const SAMPLE_RATE = 16000;
 const BIT_RATE = 32;
 const BUFFER_SIZE = 4096;
@@ -43,15 +43,18 @@ class AudioRecorder {
   private stream: MediaStream | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private processor: ScriptProcessorNode | null = null;
+  private mediaRecorder: MediaRecorder | null = null;
+  private mediaChunks: Blob[] = [];
+  private mediaMimeType = '';
   private encoder: Mp3Encoder | null = null;
   private mp3Chunks: Int8Array[] = [];
+  private fallbackMp3Blob: Blob | null = null;
   private startTime = 0;
   private pausedAt = 0;
   private totalPausedMs = 0;
   private _paused = false;
   private wakeLock: WakeLockSentinel | null = null;
   private timerInterval: ReturnType<typeof setInterval> | null = null;
-  private onDuration: DurationCallback | null = null;
   private onLevel: LevelCallback | null = null;
   private onGain: GainCallback | null = null;
   private onSegment: SegmentCallback | null = null;
@@ -67,15 +70,17 @@ class AudioRecorder {
   private segmentHasVoice = false;
   private lastVoiceAt = 0;
   private segmentIndex = 0;
+  private visibilityHandler: (() => void) | null = null;
 
   async start(options: RecorderOptions): Promise<void> {
-    this.onDuration = options.onDuration;
     this.onLevel = options.onLevel ?? null;
     this.onGain = options.onGain ?? null;
     this.onSegment = options.onSegment ?? null;
     this.autoGain = options.autoGain ?? false;
     this.silenceSeconds = options.silenceSeconds ?? 2.5;
     this.maxSegmentSeconds = options.maxSegmentSeconds ?? 8;
+    this.fallbackMp3Blob = null;
+
     const Mp3Encoder = window.lamejs?.Mp3Encoder;
     if (!Mp3Encoder) throw new Error('No se pudo cargar el codificador MP3');
 
@@ -87,6 +92,8 @@ class AudioRecorder {
         autoGainControl: false,
       },
     });
+
+    this.startNativeCapture();
 
     this.audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
     this.encoder = new Mp3Encoder(1, this.audioContext.sampleRate, BIT_RATE);
@@ -112,8 +119,7 @@ class AudioRecorder {
       const stats = this.measure(pcm);
       this.emitLevelFromStats(stats.level);
       this.handleSegment(pcm, stats);
-      const int16 = this.toInt16(pcm);
-      const chunk = this.encoder!.encodeBuffer(int16);
+      const chunk = this.encoder!.encodeBuffer(this.toInt16(pcm));
       if (chunk.length > 0) this.mp3Chunks.push(new Int8Array(chunk));
     };
 
@@ -124,50 +130,58 @@ class AudioRecorder {
       if (!this._paused) options.onDuration(this.elapsed());
     }, 500);
 
-    // Wake Lock — keep screen on; if denied, recording still continues
-    try {
-      this.wakeLock = await navigator.wakeLock?.request('screen') ?? null;
-    } catch {
-      this.wakeLock = null;
-    }
-
+    await this.requestWakeLock();
+    this.setupVisibilityProtection();
     this.setupMediaSession();
   }
 
   pause(): void {
     this._paused = true;
     this.pausedAt = Date.now();
-    if ('mediaSession' in navigator)
+    if (this.mediaRecorder?.state === 'recording') {
+      this.mediaRecorder.pause();
+    }
+    if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'paused';
+    }
   }
 
   resume(): void {
     if (this.pausedAt) this.totalPausedMs += Date.now() - this.pausedAt;
     this._paused = false;
     this.pausedAt = 0;
-    if ('mediaSession' in navigator)
+    if (this.mediaRecorder?.state === 'paused') {
+      this.mediaRecorder.resume();
+    }
+    void this.requestWakeLock();
+    if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'playing';
+    }
   }
 
   async stop(): Promise<Blob> {
-    clearInterval(this.timerInterval!);
+    if (this.timerInterval) clearInterval(this.timerInterval);
     this.timerInterval = null;
+
+    const nativeBlob = await this.stopNativeCapture();
 
     this.processor?.disconnect();
     this.source?.disconnect();
-    this.stream?.getTracks().forEach((t) => t.stop());
-
     const tail = this.encoder?.flush();
     if (tail && tail.length > 0) this.mp3Chunks.push(new Int8Array(tail));
     this.finalizeSegment(this.elapsed());
+    this.fallbackMp3Blob = new Blob(this.mp3Chunks as unknown as BlobPart[], { type: 'audio/mpeg' });
 
     await this.audioContext?.close();
-    this.wakeLock?.release().catch(() => {});
+    this.stream?.getTracks().forEach((track) => track.stop());
+    this.releaseWakeLock();
+    this.removeVisibilityProtection();
 
-    if ('mediaSession' in navigator)
+    if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'none';
+    }
 
-    const blob = new Blob(this.mp3Chunks as unknown as BlobPart[], { type: 'audio/mpeg' });
+    const blob = nativeBlob && nativeBlob.size > 0 ? nativeBlob : this.fallbackMp3Blob;
 
     this.audioContext = null;
     this.stream = null;
@@ -180,6 +194,9 @@ class AudioRecorder {
     this.lastLevelAt = 0;
     this.lastGainAt = 0;
     this.mp3Chunks = [];
+    this.mediaChunks = [];
+    this.mediaRecorder = null;
+    this.mediaMimeType = '';
     this.segmentChunks = [];
     this.segmentEncoder = null;
 
@@ -194,6 +211,10 @@ class AudioRecorder {
 
   get paused() {
     return this._paused;
+  }
+
+  getFallbackMp3Blob(): Blob | null {
+    return this.fallbackMp3Blob;
   }
 
   setGain(gain: number) {
@@ -230,8 +251,8 @@ class AudioRecorder {
   private toInt16(f32: Float32Array): Int16Array {
     const out = new Int16Array(f32.length);
     for (let i = 0; i < f32.length; i++) {
-      const s = Math.max(-1, Math.min(1, f32[i]));
-      out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      const sample = Math.max(-1, Math.min(1, f32[i]));
+      out[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
     }
     return out;
   }
@@ -324,10 +345,116 @@ class AudioRecorder {
   private setupMediaSession() {
     if (!('mediaSession' in navigator)) return;
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: 'Grabando…',
+      title: 'Grabando...',
       artist: 'VoiceNote',
     });
     navigator.mediaSession.playbackState = 'playing';
+    try {
+      navigator.mediaSession.setActionHandler('pause', () => {});
+      navigator.mediaSession.setActionHandler('play', () => {});
+      navigator.mediaSession.setActionHandler('stop', () => {});
+    } catch {
+      // Some browsers expose Media Session only partially.
+    }
+  }
+
+  private startNativeCapture() {
+    if (!this.stream || typeof MediaRecorder === 'undefined') return;
+
+    const mimeType = this.pickMediaRecorderMimeType();
+    try {
+      this.mediaRecorder = mimeType
+        ? new MediaRecorder(this.stream, { mimeType })
+        : new MediaRecorder(this.stream);
+      this.mediaMimeType = this.mediaRecorder.mimeType || mimeType || 'audio/webm';
+      this.mediaChunks = [];
+      this.mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) this.mediaChunks.push(event.data);
+      };
+      this.mediaRecorder.start(1000);
+    } catch {
+      this.mediaRecorder = null;
+      this.mediaChunks = [];
+      this.mediaMimeType = '';
+    }
+  }
+
+  private stopNativeCapture(): Promise<Blob | null> {
+    const recorder = this.mediaRecorder;
+    if (!recorder) return Promise.resolve(null);
+
+    if (recorder.state === 'inactive') {
+      return Promise.resolve(this.buildNativeBlob());
+    }
+
+    return new Promise((resolve) => {
+      const finish = () => resolve(this.buildNativeBlob());
+      recorder.addEventListener('stop', finish, { once: true });
+      recorder.addEventListener('error', () => resolve(this.buildNativeBlob()), { once: true });
+      try {
+        recorder.requestData();
+      } catch {
+        // The final stop event should still flush what the browser has buffered.
+      }
+      try {
+        recorder.stop();
+      } catch {
+        resolve(this.buildNativeBlob());
+      }
+    });
+  }
+
+  private buildNativeBlob(): Blob | null {
+    if (this.mediaChunks.length === 0) return null;
+    return new Blob(this.mediaChunks, { type: this.mediaMimeType || this.mediaChunks[0]?.type || 'audio/webm' });
+  }
+
+  private pickMediaRecorderMimeType(): string {
+    const candidates = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/mp4',
+      'audio/mpeg',
+    ];
+    return candidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? '';
+  }
+
+  private async requestWakeLock() {
+    try {
+      this.wakeLock = await navigator.wakeLock?.request('screen') ?? null;
+    } catch {
+      this.wakeLock = null;
+    }
+  }
+
+  private releaseWakeLock() {
+    this.wakeLock?.release().catch(() => {});
+    this.wakeLock = null;
+  }
+
+  private setupVisibilityProtection() {
+    this.removeVisibilityProtection();
+    this.visibilityHandler = () => {
+      if (document.visibilityState === 'visible' && !this._paused && this.stream) {
+        void this.requestWakeLock();
+      }
+      if (this.mediaRecorder?.state === 'recording') {
+        try {
+          this.mediaRecorder.requestData();
+        } catch {
+          // Best effort flush before the OS throttles the tab.
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', this.visibilityHandler);
+    window.addEventListener('pagehide', this.visibilityHandler);
+  }
+
+  private removeVisibilityProtection() {
+    if (!this.visibilityHandler) return;
+    document.removeEventListener('visibilitychange', this.visibilityHandler);
+    window.removeEventListener('pagehide', this.visibilityHandler);
+    this.visibilityHandler = null;
   }
 }
 

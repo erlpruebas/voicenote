@@ -15,7 +15,13 @@ import {
   formatDuration,
   isFileSystemSupported,
 } from '../services/fileStorage';
-import { convertToLightMp3, isMp3File, mediaBaseName } from '../services/mediaConversion';
+import {
+  convertBlobToLightMp3,
+  convertToLightMp3,
+  isMp3Blob,
+  isMp3File,
+  mediaBaseName,
+} from '../services/mediaConversion';
 import { estimateGeminiTranscriptionCostUsd, formatUsd } from '../services/cost';
 import { Recording, VoiceNoteSession } from '../types';
 
@@ -116,7 +122,7 @@ export function RecorderScreen() {
     if (stoppingRef.current) return;
     stoppingRef.current = true;
     setRecordingStatus('processing');
-    setStatusMsg('Guardando audio...');
+    setStatusMsg('Preparando audio...');
 
     let blob: Blob;
     try {
@@ -129,7 +135,16 @@ export function RecorderScreen() {
       return;
     }
 
-    await processAudioBlob(blob, elapsedSeconds, currentName || generateTimestamp(), true);
+    const baseName = currentName || generateTimestamp();
+    try {
+      const mp3Blob = await prepareMp3Blob(blob, `${baseName}.webm`, 'Convirtiendo grabacion a MP3 ligero...');
+      await processAudioBlob(mp3Blob, elapsedSeconds, baseName, true);
+    } catch (err) {
+      setRecordingStatus('idle');
+      setInputLevel(0);
+      stoppingRef.current = false;
+      setStatusMsg(`No se pudo preparar la grabacion: ${(err as Error).message}`);
+    }
   }
 
   async function handleFileSelected(e: ChangeEvent<HTMLInputElement>) {
@@ -162,7 +177,7 @@ export function RecorderScreen() {
       }
 
       const duration = await getAudioDuration(mp3Blob).catch(() => 0);
-      await processAudioBlob(mp3Blob, duration, baseName, false);
+      await processAudioBlob(mp3Blob, duration, baseName, true);
     } catch (err) {
       setRecordingStatus('idle');
       stoppingRef.current = false;
@@ -259,6 +274,22 @@ export function RecorderScreen() {
     setInputLevel(0);
     stoppingRef.current = false;
     setTimeout(() => setStatusMsg(''), 6000);
+  }
+
+  async function prepareMp3Blob(blob: Blob, fileName: string, message: string): Promise<Blob> {
+    if (isMp3Blob(blob, fileName)) return blob;
+
+    setStatusMsg(message);
+    try {
+      return await convertBlobToLightMp3(blob, fileName, mediaServerUrl, mediaServerToken);
+    } catch (err) {
+      const fallback = audioRecorder.getFallbackMp3Blob();
+      if (fallback && fallback.size > 0) {
+        setStatusMsg('Servidor no disponible. Usando MP3 local de respaldo...');
+        return fallback;
+      }
+      throw err;
+    }
   }
 
   function getAudioDuration(file: Blob): Promise<number> {

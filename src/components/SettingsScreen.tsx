@@ -198,7 +198,7 @@ export function SettingsScreen() {
         <h3 className="section-title">Servidor multimedia</h3>
         <div className="card flex flex-col gap-3">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Convierte audios y videos a MP3 ligero antes de transcribir. Para el servidor local usa normalmente <code>http://IP_DEL_PC:8787</code>.
+            Convierte grabaciones, audios y videos a MP3 ligero antes de transcribir. Para el servidor local usa normalmente <code>http://IP_DEL_PC:8787</code>.
           </p>
           <div>
             <label className="field-label">URL del servidor</label>
