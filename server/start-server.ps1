@@ -6,6 +6,10 @@ $port = if ($env:PORT) { $env:PORT } else { "8787" }
 $maxFileMb = if ($env:MAX_FILE_MB) { $env:MAX_FILE_MB } else { "2048" }
 $tokenConfigured = -not [string]::IsNullOrWhiteSpace($env:VOICENOTE_SERVER_TOKEN)
 
+if (-not (Get-Command node -ErrorAction SilentlyContinue) -and (Test-Path "C:\Program Files\nodejs\node.exe")) {
+  $env:Path = "C:\Program Files\nodejs;$env:Path"
+}
+
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
   Write-Host "Node.js no esta instalado." -ForegroundColor Red
   Write-Host "Instala Node.js LTS con:"
