@@ -20,6 +20,7 @@ import {
   convertToLightMp3,
   isMp3Blob,
   isMp3File,
+  isLikelyMp3File,
   mediaBaseName,
 } from '../services/mediaConversion';
 import { estimateGeminiTranscriptionCostUsd, formatUsd } from '../services/cost';
@@ -156,10 +157,11 @@ export function RecorderScreen() {
     setCurrentName(baseName);
     setElapsedSeconds(0);
     setRecordingStatus('processing');
-    setStatusMsg(isMp3File(file) ? 'Cargando MP3...' : 'Convirtiendo archivo a MP3 ligero...');
 
     try {
-      const mp3Blob = isMp3File(file)
+      const fileIsMp3 = await isLikelyMp3File(file);
+      setStatusMsg(fileIsMp3 ? 'Cargando MP3...' : 'Convirtiendo archivo a MP3 ligero...');
+      const mp3Blob = fileIsMp3
         ? file
         : await convertToLightMp3(file, mediaServerUrl, mediaServerToken);
 

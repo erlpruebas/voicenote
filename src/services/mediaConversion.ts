@@ -6,6 +6,15 @@ export function isMp3Blob(blob: Blob, fileName = ''): boolean {
   return /\.mp3$/i.test(fileName) || blob.type === 'audio/mpeg' || blob.type === 'audio/mp3';
 }
 
+export async function isLikelyMp3File(file: File): Promise<boolean> {
+  if (isMp3File(file)) return true;
+
+  const header = new Uint8Array(await file.slice(0, 3).arrayBuffer());
+  const hasId3Header = header[0] === 0x49 && header[1] === 0x44 && header[2] === 0x33;
+  const hasFrameSync = header[0] === 0xff && (header[1] & 0xe0) === 0xe0;
+  return hasId3Header || hasFrameSync;
+}
+
 export function mediaBaseName(fileName: string): string {
   return fileName.replace(/\.[^.]+$/i, '') || 'audio';
 }
