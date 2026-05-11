@@ -198,7 +198,7 @@ export function SettingsScreen() {
         <h3 className="section-title">Servidor multimedia</h3>
         <div className="card flex flex-col gap-3">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Convierte grabaciones, audios y videos a MP3 ligero antes de transcribir. Para el servidor local usa normalmente <code>http://IP_DEL_PC:8787</code>.
+            Convierte grabaciones, audios y videos a MP3 ligero antes de transcribir. Desde el movil usa una URL HTTPS de tunel; <code>localhost</code> solo sirve en este ordenador.
           </p>
           <div>
             <label className="field-label">URL del servidor</label>
@@ -220,7 +220,7 @@ export function SettingsScreen() {
             />
           </div>
           <p className="text-xs text-gray-400">
-            Para acceder desde cualquier sitio usa una URL HTTPS publica del servidor y protege /convert con token.
+            Si la app esta publicada en HTTPS, una URL <code>http://</code> puede quedar bloqueada por el navegador.
           </p>
         </div>
       </section>

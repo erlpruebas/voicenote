@@ -30,11 +30,25 @@ export async function convertBlobToLightMp3(
     headers.Authorization = `Bearer ${serverToken.trim()}`;
   }
 
-  const response = await fetch(`${baseUrl}/convert`, {
-    method: 'POST',
-    headers,
-    body: form,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/convert`, {
+      method: 'POST',
+      headers,
+      body: form,
+    });
+  } catch (error) {
+    const isHttpsApp = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(baseUrl);
+    const isPlainHttp = /^http:\/\//i.test(baseUrl);
+    const hints = [
+      'No se pudo conectar con el servidor multimedia.',
+      isLocalhost ? 'En un movil, localhost apunta al movil, no al ordenador.' : '',
+      isHttpsApp && isPlainHttp ? 'La app esta en HTTPS y el navegador bloquea servidores HTTP; usa una URL HTTPS de tunel.' : '',
+      'Comprueba que el servidor este abierto y que la URL de Ajustes sea correcta.',
+    ].filter(Boolean).join(' ');
+    throw new Error(`${hints} Detalle: ${(error as Error).message}`);
+  }
 
   if (!response.ok) {
     const message = await response.text().catch(() => '');

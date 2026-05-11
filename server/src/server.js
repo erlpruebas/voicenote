@@ -27,7 +27,7 @@ const app = express();
 app.use(cors());
 
 app.use((req, res, next) => {
-  if (!SERVER_TOKEN || req.path === '/health') {
+  if (!SERVER_TOKEN || req.path === '/' || req.path === '/health') {
     next();
     return;
   }
@@ -42,9 +42,37 @@ app.use((req, res, next) => {
   res.status(401).send('Token del servidor multimedia invalido o ausente.');
 });
 
+app.get('/', (_req, res) => {
+  res.type('html').send(`<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VoiceNote Media Server</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 32px; line-height: 1.5; color: #111827; }
+      code { background: #f3f4f6; padding: 2px 6px; border-radius: 6px; }
+      .ok { color: #047857; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <h1>VoiceNote Media Server</h1>
+    <p class="ok">Servidor activo.</p>
+    <p>Este servidor convierte audio y video a MP3 ligero para VoiceNote.</p>
+    <p>Comprobacion tecnica: <a href="/health"><code>/health</code></a></p>
+    <p>La app usa <code>POST /convert</code>; abrir <code>/convert</code> directamente en el navegador no convierte archivos.</p>
+  </body>
+</html>`);
+});
+
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'voicenote-media-server' });
 });
+
+app.get('/convert', (_req, res) => {
+  res.status(405).send('Usa la app VoiceNote para enviar archivos con POST /convert.');
+});
+
 
 app.post('/convert', upload.single('file'), async (req, res) => {
   const input = req.file;
